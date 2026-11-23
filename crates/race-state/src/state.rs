@@ -108,10 +108,71 @@ struct CarHistory {
     wear_points: Vec<(f32, [f32; 4])>,
 }
 
+/// Builds the track outline from every running car's position, binned by lap
+/// distance. With a full grid it completes within about a lap of green running,
+/// and it does not need the player to drive a clean lap.
 #[derive(Debug, Clone, Default)]
 struct OutlineBuilder {
-    points: Vec<(f32, [f32; 2])>,
-    valid: bool,
+    len: f32,
+    bins: Vec<([f64; 2], u32)>,
+    filled: usize,
+}
+
+const OUTLINE_BIN_M: f32 = 8.0;
+const OUTLINE_MAX_SAMPLES: u32 = 16;
+
+impl OutlineBuilder {
+    fn add(&mut self, len: f32, dist: f32, x: f32, z: f32) {
+        if len < 500.0 || !(0.0..len).contains(&dist) || (x == 0.0 && z == 0.0) {
+            return;
+        }
+        if self.len != len || self.bins.is_empty() {
+            let n = (len / OUTLINE_BIN_M).ceil() as usize;
+            *self = Self { len, bins: vec![([0.0; 2], 0); n], filled: 0 };
+        }
+        let n = self.bins.len();
+        let i = (((dist / len) * n as f32) as usize).min(n - 1);
+        let b = &mut self.bins[i];
+        if b.1 == 0 {
+            self.filled += 1;
+        }
+        if b.1 < OUTLINE_MAX_SAMPLES {
+            b.0[0] += x as f64;
+            b.0[1] += z as f64;
+            b.1 += 1;
+        }
+    }
+
+    fn complete(&self) -> bool {
+        !self.bins.is_empty() && self.filled * 100 >= self.bins.len() * 97
+    }
+
+    /// Mean position per bin; empty bins are interpolated from their neighbours.
+    fn points(&self) -> Vec<[f32; 2]> {
+        let n = self.bins.len();
+        let mean: Vec<Option<[f32; 2]>> = self
+            .bins
+            .iter()
+            .map(|(s, c)| (*c > 0).then(|| [(s[0] / *c as f64) as f32, (s[1] / *c as f64) as f32]))
+            .collect();
+        if self.filled == 0 {
+            return Vec::new();
+        }
+        (0..n)
+            .map(|i| {
+                if let Some(p) = mean[i] {
+                    return p;
+                }
+                let prev = (1..n).map(|k| (i + n - k) % n).find(|&j| mean[j].is_some()).unwrap_or(i);
+                let next = (1..n).map(|k| (i + k) % n).find(|&j| mean[j].is_some()).unwrap_or(i);
+                let (a, b) = (mean[prev].unwrap_or_default(), mean[next].unwrap_or_default());
+                let dp = (i + n - prev) % n;
+                let dn = (next + n - i) % n;
+                let t = dp as f32 / (dp + dn).max(1) as f32;
+                [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+            })
+            .collect()
+    }
 }
 
 pub struct RaceState {
@@ -266,7 +327,7 @@ impl RaceState {
             Packet::CarTelemetry(x) => self.telemetry = Some((**x).clone()),
             Packet::CarStatus(x) => self.on_status(x),
             Packet::CarDamage(x) => self.damage = Some((**x).clone()),
-            Packet::Motion(m) => self.on_motion(m),
+            Packet::Motion(m) => self.on_motion(m, &mut ev),
             Packet::CarSetups(x) => self.setups = Some((**x).clone()),
             Packet::SessionHistory(hh) => {
                 if let Some(slot) = self.history.get_mut(hh.car_idx as usize) {
@@ -379,29 +440,25 @@ impl RaceState {
         self.status = Some(s.clone());
     }
 
-    fn on_motion(&mut self, m: &MotionPacket) {
+    fn on_motion(&mut self, m: &MotionPacket, ev: &mut Vec<StateEvent>) {
         self.motion = Some(m.clone());
         if self.outline_available {
             return;
         }
+        let len = self.track_length();
         let Some(lap) = &self.lap else { return };
-        let l = &lap.cars[self.player];
-        if l.current_lap_invalid || l.pit_status != 0 {
-            self.outline.valid = false;
-        }
-        if l.lap_distance < 0.0 {
-            return;
-        }
-        let pos = m.cars[self.player].world_position;
-        let push = match self.outline.points.last() {
-            None => true,
-            Some(&(d, _)) => l.lap_distance - d >= 8.0,
-        };
-        if push {
-            if self.outline.points.is_empty() {
-                self.outline.valid = !l.current_lap_invalid && l.pit_status == 0 && l.lap_distance < 50.0;
+        for (l, c) in lap.cars.iter().zip(m.cars.iter()) {
+            // Running cars only: active, out of the garage and not in the pit lane.
+            if l.result_status != 2 || l.driver_status == 0 || l.pit_status != 0 {
+                continue;
             }
-            self.outline.points.push((l.lap_distance, [pos[0], pos[2]]));
+            self.outline.add(len, l.lap_distance, c.world_position[0], c.world_position[2]);
+        }
+        if self.outline.complete() {
+            let points = self.outline.points();
+            self.outline = OutlineBuilder::default();
+            self.outline_available = true;
+            ev.push(StateEvent::TrackOutline { track_id: self.track_id().unwrap_or(-1), length_m: len, points });
         }
     }
 
@@ -422,7 +479,6 @@ impl RaceState {
             self.prev_lap = None;
         }
 
-        let track_len = self.track_length();
         let prev = self.prev_lap.take().or_else(|| self.lap.clone());
         for i in 0..MAX_CARS {
             let cur = &l.cars[i];
@@ -474,22 +530,6 @@ impl RaceState {
             }
             ev.push(StateEvent::Wire(PitWallEvent::LapCompleted { car_index: i as u8, lap: completed, lap_ms }));
             ev.push(StateEvent::LapCompleted(row));
-
-            if i == self.player && !self.outline_available {
-                let b = std::mem::take(&mut self.outline);
-                let span = match (b.points.first(), b.points.last()) {
-                    (Some(a), Some(z)) => z.0 - a.0,
-                    _ => 0.0,
-                };
-                if b.valid && track_len > 0.0 && span >= track_len * 0.92 && b.points.len() >= 50 {
-                    self.outline_available = true;
-                    ev.push(StateEvent::TrackOutline {
-                        track_id: self.track_id().unwrap_or(-1),
-                        length_m: track_len,
-                        points: b.points.iter().map(|p| p.1).collect(),
-                    });
-                }
-            }
         }
         self.prev_lap = Some(l.clone());
         self.lap = Some(l.clone());
