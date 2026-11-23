@@ -424,7 +424,28 @@ impl AudioActor {
         Ok((samples, player))
     }
 
+    /// Synthesize the short replies the driver hears most into the cache, so
+    /// the first "Copy, stand by." isn't waiting on a cold TTS model.
+    async fn warm_up(&self) {
+        if !self.tts.enabled() || self.player.is_none() {
+            return;
+        }
+        let t0 = now_ms();
+        let mut ok = 0;
+        for text in [comms::answers::ACK_THINKING, "Loud and clear.", comms::answers::SAY_AGAIN] {
+            match self.render(text, Priority::P1, 1).await {
+                Ok(_) => ok += 1,
+                Err(e) => {
+                    tracing::info!("TTS warm-up skipped ({e:#})");
+                    return;
+                }
+            }
+        }
+        tracing::info!("TTS warmed up ({ok} phrases cached in {} ms)", now_ms() - t0);
+    }
+
     pub async fn run(mut self) {
+        self.warm_up().await;
         let mut seed = 1u32;
         while let Some(u) = self.rx.recv().await {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -460,8 +481,12 @@ impl AudioActor {
 /// Periodically probe the TTS sidecar so the UI can show its health.
 pub async fn run_tts_health(tts: TtsClient, has_player: bool, comms: mpsc::Sender<CommsCmd>, health: watch::Sender<HealthInfo>) {
     let mut last: Option<bool> = None;
+    let mut fails = 0u32;
     loop {
-        let ok = has_player && tts.health().await;
+        let reachable = has_player && tts.health().await;
+        fails = if reachable { 0 } else { fails + 1 };
+        // A busy Kokoro (synthesizing on CPU) can miss one probe; need two in a row.
+        let ok = reachable || (fails < 2 && last == Some(true));
         if last != Some(ok) {
             last = Some(ok);
             if tts.enabled() {

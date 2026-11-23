@@ -407,7 +407,7 @@ impl RuleEngine {
             if to_go == 1 {
                 let v = vec!["Last lap. Bring it home.".to_string(), "Final lap. Nice and clean, bring it home.".to_string()];
                 out.push(self.alert("last_lap", Priority::P2, AlertLevel::Nominal, "session", &v, vec![]));
-            } else if to_go == 5 {
+            } else if to_go == 5 && s.total_laps >= 10 {
                 let v = vec![format!("Five laps to go. P{pos}, keep it tidy.")];
                 out.push(self.alert("five_to_go", Priority::P2, AlertLevel::Nominal, "session", &v, vec![]));
             }

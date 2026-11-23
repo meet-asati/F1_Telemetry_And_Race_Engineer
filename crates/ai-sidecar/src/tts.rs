@@ -45,7 +45,8 @@ impl Default for TtsConfig {
             voice: "bm_george".into(),
             model: "kokoro".into(),
             speed: 1.0,
-            timeout_ms: 8000,
+            // Kokoro on CPU: the first lines after start can take several seconds.
+            timeout_ms: 20_000,
         }
     }
 }
@@ -92,7 +93,7 @@ impl TtsClient {
         if !self.enabled() {
             return false;
         }
-        self.http.get(&self.cfg.url).timeout(Duration::from_secs(2)).send().await.is_ok()
+        self.http.get(&self.cfg.url).timeout(Duration::from_secs(5)).send().await.is_ok()
     }
 
     pub async fn synthesize(&self, text: &str) -> anyhow::Result<Pcm> {
@@ -180,5 +181,20 @@ mod tests {
         let pcm = c.synthesize_with("Box box", 1.1).await.unwrap();
         assert_eq!(pcm.sample_rate, 24000);
         assert_eq!(pcm.samples.len(), 240);
+    }
+}
+
+#[cfg(test)]
+mod live {
+    /// `KOKORO_URL=http://127.0.0.1:8880 cargo test -p ai-sidecar kokoro_live -- --ignored`
+    #[tokio::test]
+    #[ignore]
+    async fn kokoro_live() {
+        let url = std::env::var("KOKORO_URL").expect("set KOKORO_URL");
+        let c = super::TtsClient::new(super::TtsConfig { url, ..Default::default() }).unwrap();
+        let t0 = std::time::Instant::now();
+        let p = c.synthesize_with("Box box, box box. Good stop, mediums fitted.", 1.08).await.unwrap();
+        println!("kokoro: {} ms audio at {} Hz in {} ms", p.duration_ms(), p.sample_rate, t0.elapsed().as_millis());
+        assert!(p.duration_ms() > 1000);
     }
 }

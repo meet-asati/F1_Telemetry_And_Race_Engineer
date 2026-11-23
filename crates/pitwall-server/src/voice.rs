@@ -118,7 +118,14 @@ pub struct PttState {
     bit: u32,
     last_pressed: bool,
     active: bool,
+    /// Auto mode: when the current press started, and whether a short tap
+    /// latched the channel open.
+    press_ms: u64,
+    latched: bool,
 }
+
+/// Auto mode: a press shorter than this is a tap (latch), longer is hold-to-talk.
+pub const TAP_MS: u64 = 450;
 
 #[derive(Debug, PartialEq)]
 pub enum PttEdge {
@@ -128,23 +135,48 @@ pub enum PttEdge {
 
 impl PttState {
     pub fn new(mode: PttMode, button: u8) -> Self {
-        Self { mode, bit: f1_udp::packets::udp_action_bit(button), last_pressed: false, active: false }
+        Self { mode, bit: f1_udp::packets::udp_action_bit(button), last_pressed: false, active: false, press_ms: 0, latched: false }
     }
 
     pub fn active(&self) -> bool {
         self.active
     }
 
-    /// Feed a BUTN bit field.
-    pub fn on_buttons(&mut self, status: u32) -> Option<PttEdge> {
+    /// Feed a BUTN bit field (`now` in ms).
+    pub fn on_buttons(&mut self, status: u32, now: u64) -> Option<PttEdge> {
         let pressed = status & self.bit != 0;
         let rising = pressed && !self.last_pressed;
+        let falling = !pressed && self.last_pressed;
         self.last_pressed = pressed;
         match self.mode {
             PttMode::Hold => self.set(pressed),
             PttMode::Toggle if rising => self.set(!self.active),
             PttMode::Toggle => None,
+            PttMode::Auto => {
+                if rising {
+                    if self.active && self.latched {
+                        // Second tap: send.
+                        return self.set(false);
+                    }
+                    self.press_ms = now;
+                    return self.set(true);
+                }
+                if falling && self.active && !self.latched {
+                    if now.saturating_sub(self.press_ms) < TAP_MS {
+                        // Short tap: keep the channel open until the next tap.
+                        self.latched = true;
+                        return None;
+                    }
+                    return self.set(false);
+                }
+                None
+            }
         }
+    }
+
+    /// Latched open by a tap (Auto mode)?
+    pub fn latched(&self) -> bool {
+        self.active && self.latched
     }
 
     /// Direct set (UI button, or the stuck-PTT timeout).
@@ -153,6 +185,9 @@ impl PttState {
             return None;
         }
         self.active = on;
+        if !on {
+            self.latched = false;
+        }
         Some(if on { PttEdge::Start } else { PttEdge::Stop })
     }
 }
@@ -211,7 +246,13 @@ impl VoiceActor {
                             last_health = 0;
                             None
                         }
-                        VoiceCmd::Buttons(b) if self.cfg.enabled => ptt.on_buttons(b),
+                        VoiceCmd::Buttons(b) if self.cfg.enabled => {
+                            let edge = ptt.on_buttons(b, now_ms());
+                            if edge.is_none() && ptt.latched() {
+                                tracing::info!("push-to-talk latched open (tap again to send)");
+                            }
+                            edge
+                        }
                         VoiceCmd::Ptt(on) if self.cfg.enabled => ptt.set(on),
                         VoiceCmd::Buttons(_) | VoiceCmd::Ptt(_) => None,
                         VoiceCmd::Ask(text) => {
@@ -315,7 +356,7 @@ impl VoiceActor {
             return;
         };
         let clip = mic.end();
-        tracing::info!("push-to-talk released: {} ms held, {} ms recorded, level {:.3}", held_ms, clip.duration_ms(), clip.rms());
+        tracing::info!("push-to-talk released: {} ms held, {} ms recorded, level {:.4}", held_ms, clip.duration_ms(), clip.rms());
         if held_ms < self.cfg.min_ptt_ms || clip.duration_ms() < self.cfg.min_ptt_ms {
             tracing::info!("ignoring {held_ms} ms push-to-talk blip (hold the button while you talk)");
             return;
@@ -411,7 +452,10 @@ async fn answer(question: String, comms: &mpsc::Sender<CommsCmd>, llm: &LlmClien
         }
         Err(e) => {
             tracing::warn!("LLM failed: {e:#}");
-            let _ = comms.send(CommsCmd::DriverAnswer { text: "Copy, we'll come back to you on that.".into(), source: RadioSource::Rule }).await;
+            // Fall back to whatever telemetry can say about the question.
+            let s = snap.borrow().clone();
+            let text = answers::answer(&question, &s, false).unwrap_or_else(|| "Copy, we'll come back to you on that.".into());
+            let _ = comms.send(CommsCmd::DriverAnswer { text, source: RadioSource::Rule }).await;
         }
     }
 }
@@ -429,25 +473,42 @@ mod tests {
     }
 
     #[test]
+    fn auto_mode_supports_hold_and_tap() {
+        let bit = f1_udp::packets::udp_action_bit(1);
+        let mut p = PttState::new(PttMode::Auto, 1);
+        // Hold to talk.
+        assert_eq!(p.on_buttons(bit, 1000), Some(PttEdge::Start));
+        assert_eq!(p.on_buttons(0, 3000), Some(PttEdge::Stop));
+        // Tap (the 264 ms press from the log) latches open...
+        assert_eq!(p.on_buttons(bit, 5000), Some(PttEdge::Start));
+        assert_eq!(p.on_buttons(0, 5264), None);
+        assert!(p.latched());
+        // ...and the next tap sends; its release is ignored.
+        assert_eq!(p.on_buttons(bit, 8000), Some(PttEdge::Stop));
+        assert_eq!(p.on_buttons(0, 8100), None);
+        assert!(!p.active());
+    }
+
+    #[test]
     fn hold_mode_follows_the_button() {
         let bit = f1_udp::packets::udp_action_bit(3);
         let mut p = PttState::new(PttMode::Hold, 3);
-        assert_eq!(p.on_buttons(0x1), None, "other buttons are ignored");
-        assert_eq!(p.on_buttons(bit | 0x1), Some(PttEdge::Start));
-        assert_eq!(p.on_buttons(bit), None, "still held");
-        assert_eq!(p.on_buttons(0), Some(PttEdge::Stop));
+        assert_eq!(p.on_buttons(0x1, 0), None, "other buttons are ignored");
+        assert_eq!(p.on_buttons(bit | 0x1, 0), Some(PttEdge::Start));
+        assert_eq!(p.on_buttons(bit, 10), None, "still held");
+        assert_eq!(p.on_buttons(0, 20), Some(PttEdge::Stop));
     }
 
     #[test]
     fn toggle_mode_flips_on_presses() {
         let bit = f1_udp::packets::udp_action_bit(1);
         let mut p = PttState::new(PttMode::Toggle, 1);
-        assert_eq!(p.on_buttons(bit), Some(PttEdge::Start));
-        assert_eq!(p.on_buttons(0), None, "release does nothing");
-        assert_eq!(p.on_buttons(bit), Some(PttEdge::Stop));
-        assert_eq!(p.on_buttons(0), None);
+        assert_eq!(p.on_buttons(bit, 0), Some(PttEdge::Start));
+        assert_eq!(p.on_buttons(0, 100), None, "release does nothing");
+        assert_eq!(p.on_buttons(bit, 2000), Some(PttEdge::Stop));
+        assert_eq!(p.on_buttons(0, 2100), None);
         // Timeout path.
-        assert_eq!(p.on_buttons(bit), Some(PttEdge::Start));
+        assert_eq!(p.on_buttons(bit, 3000), Some(PttEdge::Start));
         assert_eq!(p.set(false), Some(PttEdge::Stop));
         assert!(!p.active());
     }

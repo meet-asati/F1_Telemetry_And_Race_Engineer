@@ -107,7 +107,7 @@ ollama pull qwen2.5:3b
 ### 4. Push-to-talk
 
 1. In the game, go to **Controls**. Map a wheel button to **UDP Action 1** (or set `[voice] ptt_button`). Make sure UDP telemetry is on.
-2. Hold the button and talk. The engineer's line cuts out, you hear a chirp, and you get an answer when you release.
+2. Hold the button while you talk and release to send, or tap it once, talk, and tap again to send. The engineer's line cuts out and you hear a chirp when the channel opens.
 3. Without a wheel binding, use the **Hold to talk** button on the driver view (`/driver`) or in the AI Engineer monitor. That monitor also has an **Ask engineer** box for typed questions.
 
 Run `pitwall-server --list-audio-devices` to see speaker and microphone names for `[audio] device` and `[voice] input_device`. Set `[comms] driver_name` so the engineer can use your first name now and then.

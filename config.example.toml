@@ -34,7 +34,7 @@ voice = "bm_george"
 model = "kokoro"
 # Base speaking rate. Urgent calls are delivered ~8% quicker, routine ones ~3% calmer.
 speed = 1.0
-timeout_ms = 8000
+timeout_ms = 20000
 
 [stt]
 # Speech-to-text for push-to-talk. "whispercpp" (default), "openai" or "none".
@@ -62,7 +62,7 @@ model = "qwen2.5:3b"
 api_key = ""
 max_tokens = 90
 temperature = 0.3
-timeout_ms = 12000
+timeout_ms = 30000
 
 [voice]
 # Push-to-talk. In the game's controls, map a wheel button to "UDP Action 1" (or the number below).
@@ -72,8 +72,9 @@ enabled = true
 # (virtual inputs like "Steam Streaming" are skipped automatically).
 input_device = ""
 ptt_button = 1
-# "hold" = talk while held (like a real radio); "toggle" = press to start, press to stop.
-ptt_mode = "hold"
+# "auto" = hold to talk, OR tap once to open the channel and tap again to send (default);
+# "hold" = talk only while held; "toggle" = press to start, press to stop.
+ptt_mode = "auto"
 # Safety cut-off if a release packet is lost.
 max_ptt_ms = 15000
 min_ptt_ms = 350

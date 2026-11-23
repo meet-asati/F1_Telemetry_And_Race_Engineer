@@ -134,6 +134,8 @@ impl Default for AudioConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum PttMode {
+    /// Hold to talk, or tap once to open the channel and tap again to send.
+    Auto,
     /// Talk while the button is held (like a real radio).
     Hold,
     /// Press to start, press again to stop.
@@ -157,7 +159,7 @@ pub struct VoiceConfig {
 }
 impl Default for VoiceConfig {
     fn default() -> Self {
-        Self { enabled: true, input_device: String::new(), ptt_button: 1, ptt_mode: PttMode::Hold, max_ptt_ms: 15_000, min_ptt_ms: 350 }
+        Self { enabled: true, input_device: String::new(), ptt_button: 1, ptt_mode: PttMode::Auto, max_ptt_ms: 15_000, min_ptt_ms: 350 }
     }
 }
 
@@ -233,6 +235,6 @@ mod tests {
         assert_eq!(cfg.tts.voice, "bm_george");
         assert_eq!(cfg.stt.engine, ai_sidecar::SttKind::Whispercpp);
         assert_eq!(cfg.llm.model, "qwen2.5:3b");
-        assert_eq!(cfg.voice.ptt_mode, PttMode::Hold);
+        assert_eq!(cfg.voice.ptt_mode, PttMode::Auto);
     }
 }

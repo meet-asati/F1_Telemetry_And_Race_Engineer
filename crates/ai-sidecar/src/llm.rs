@@ -41,7 +41,8 @@ impl Default for LlmConfig {
             api_key: String::new(),
             max_tokens: 90,
             temperature: 0.3,
-            timeout_ms: 12_000,
+            // Cold load or CPU fallback (GPU busy with the game) can be slow.
+            timeout_ms: 30_000,
         }
     }
 }
