@@ -24,3 +24,6 @@ Thumbs.db
 
 # Locally installed AI sidecars (whisper.cpp binaries, models)
 sidecars/
+
+# Runtime data (database, whisper log, voice settings)
+data/

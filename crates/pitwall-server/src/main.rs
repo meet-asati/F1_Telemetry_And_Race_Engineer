@@ -126,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
             cfg: arb_cfg,
             rules: RuleConfig { driver_name: Some(cfg.comms.driver_name.trim().to_string()).filter(|n| !n.is_empty()), ..Default::default() },
             voice: voice_tx,
+            ptt_button: cfg.voice.ptt_button,
             initial_mode,
             rx: comms_rx,
             snapshot: snapshot_rx.clone(),
@@ -168,8 +169,13 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(run_tts_health(tts.clone(), player.is_some(), comms_tx.clone(), health_tx.clone()));
 
     // ---- Voice input (push-to-talk).
+    // Speech-to-text: start the bundled whisper.cpp server if it isn't already running.
+    let stt = ai_sidecar::SttClient::new(cfg.stt.clone())?;
+    let _whisper = if cfg.voice.enabled { voice::autostart_whisper(&stt).await } else { None };
+
+    // Microphone: config wins, then the one picked in the UI last time, then auto-pick.
     let mic = if cfg.voice.enabled {
-        let dev = (!cfg.voice.input_device.is_empty()).then(|| cfg.voice.input_device.clone());
+        let dev = Some(cfg.voice.input_device.clone()).filter(|d| !d.is_empty()).or_else(voice::load_saved_mic);
         match tokio::task::spawn_blocking(move || voice_comms::MicCapture::start(dev.as_deref())).await? {
             Ok(m) => {
                 tracing::info!(
@@ -194,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
             cfg: cfg.voice.clone(),
             rx: voice_rx,
             mic,
-            stt: ai_sidecar::SttClient::new(cfg.stt.clone())?,
+            stt,
             llm: ai_sidecar::LlmClient::new(cfg.llm.clone())?,
             player: player.clone(),
             snapshot: snapshot_rx.clone(),

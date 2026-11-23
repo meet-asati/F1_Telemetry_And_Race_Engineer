@@ -45,6 +45,11 @@ url = "http://127.0.0.1:8178"
 model = "Systran/faster-whisper-base.en"
 language = "en"
 timeout_ms = 8000
+# Start the bundled whisper.cpp server automatically when nothing answers on `url`.
+autostart = true
+server_exe = "sidecars/whisper/bin/Release/whisper-server.exe"
+server_model = "sidecars/whisper/models/ggml-base.en.bin"
+server_threads = 4
 
 [llm]
 # Free-form driver questions. Common ones (gaps, tyres, fuel, box?) are answered
@@ -62,7 +67,9 @@ timeout_ms = 12000
 [voice]
 # Push-to-talk. In the game's controls, map a wheel button to "UDP Action 1" (or the number below).
 enabled = true
-# Substring of the microphone name (run with --list-audio-devices). Empty = default mic.
+# Substring of the microphone name (run with --list-audio-devices). Empty = the mic picked
+# in the AI Engineer monitor last time, else the Windows default if it is a real mic
+# (virtual inputs like "Steam Streaming" are skipped automatically).
 input_device = ""
 ptt_button = 1
 # "hold" = talk while held (like a real radio); "toggle" = press to start, press to stop.

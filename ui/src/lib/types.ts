@@ -172,6 +172,16 @@ export interface CommsState {
   micAvailable: boolean;
   /** The engineer is transcribing / thinking about an answer. */
   thinking: boolean;
+  /** Live microphone input level, 0..1. */
+  micLevel: number;
+  /** The microphone in use. */
+  micDevice: string | null;
+  /** The mic delivers pure digital silence (Windows privacy block / muted / dead). */
+  micBlocked: boolean;
+  /** Configured push-to-talk wheel button ("UDP Action N"). */
+  pttButton: number;
+  /** The last "UDP Action N" button the game reported. */
+  lastUdpAction: number | null;
   speaking: boolean;
   lastSpokenLine: string | null;
   /** The driver's last radio message (transcript or typed question). */
@@ -242,6 +252,7 @@ export type ClientCommand =
   | { type: 'comms.mute'; muted: boolean; token?: string }
   | { type: 'ptt.set'; active: boolean; token?: string }
   | { type: 'driver.ask'; text: string; token?: string }
+  | { type: 'voice.setMic'; device: string; token?: string }
   | { type: 'select.car'; carIndex: number };
 
 /** Row from GET /api/sessions/:id/laps */

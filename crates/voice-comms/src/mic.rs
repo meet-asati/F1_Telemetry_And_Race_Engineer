@@ -9,7 +9,7 @@ use ai_sidecar::Pcm;
 use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 const PREROLL_MS: u32 = 300;
@@ -19,6 +19,13 @@ const MAX_CLIP_S: u32 = 60;
 struct Shared {
     armed: AtomicBool,
     alive: AtomicBool,
+    /// Decaying peak input level (f32 bits), for the UI level meter.
+    level: AtomicU32,
+    /// Any non-zero sample seen yet? A real mic always has a noise floor, so
+    /// pure digital silence means access is blocked or the device is dead.
+    any_signal: AtomicBool,
+    /// Samples received (to know the stream is actually running).
+    frames: std::sync::atomic::AtomicU64,
     clip: Mutex<Vec<f32>>,
     preroll: Mutex<VecDeque<f32>>,
 }
@@ -35,25 +42,69 @@ pub fn list_input_devices() -> Vec<String> {
     host.input_devices().map(|ds| ds.filter_map(|d| d.name().ok()).collect()).unwrap_or_default()
 }
 
+/// Loopback / streaming / virtual-cable inputs that are never a real microphone.
+pub fn is_virtual_input(name: &str) -> bool {
+    let n = name.to_lowercase();
+    ["steam streaming", "stereo mix", "cable output", "voicemeeter", "virtual", "aux jack", "wave link", "loopback", "what u hear"].iter().any(|k| n.contains(k))
+}
+
+/// Ranking used when no device is configured: the system default if it is a
+/// real mic; otherwise built-in / wired mics before Bluetooth headsets (opening
+/// a Bluetooth headset mic drops the buds into low-quality call audio).
+pub fn auto_pick_input(names: &[String], default: Option<&str>) -> Option<String> {
+    if let Some(d) = default.filter(|d| !is_virtual_input(d)) {
+        return Some(d.to_string());
+    }
+    let real: Vec<&String> = names.iter().filter(|n| !is_virtual_input(n)).collect();
+    let score = |n: &str| {
+        let l = n.to_lowercase();
+        if l.contains("headset") || l.contains("hands-free") || l.contains("buds") || l.contains("airpods") {
+            1
+        } else if l.contains("microphone") || l.contains("mic") {
+            3
+        } else {
+            2
+        }
+    };
+    real.into_iter().max_by_key(|n| score(n)).cloned()
+}
+
 impl MicCapture {
     /// Open the input device whose name contains `device` (case-insensitive),
     /// or the system default microphone.
     pub fn start(device: Option<&str>) -> anyhow::Result<Self> {
         let wanted = device.map(|s| s.to_lowercase());
-        let shared = Arc::new(Shared { armed: AtomicBool::new(false), alive: AtomicBool::new(true), clip: Mutex::new(Vec::new()), preroll: Mutex::new(VecDeque::new()) });
+        let shared = Arc::new(Shared {
+            armed: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            level: AtomicU32::new(0),
+            any_signal: AtomicBool::new(false),
+            frames: std::sync::atomic::AtomicU64::new(0),
+            clip: Mutex::new(Vec::new()),
+            preroll: Mutex::new(VecDeque::new()),
+        });
         let (ready_tx, ready_rx) = mpsc::channel::<anyhow::Result<(u32, String)>>();
         let (keep_tx, keep_rx) = mpsc::channel::<()>();
         let sh = shared.clone();
         std::thread::Builder::new().name("ptt-mic".into()).spawn(move || {
             let res = (|| -> anyhow::Result<(cpal::Stream, u32, String)> {
                 let host = cpal::default_host();
-                let dev = match &wanted {
-                    Some(w) => host
-                        .input_devices()?
-                        .find(|d| d.name().map(|n| n.to_lowercase().contains(w)).unwrap_or(false))
-                        .ok_or_else(|| anyhow!("no input device matching '{w}'"))?,
-                    None => host.default_input_device().ok_or_else(|| anyhow!("no default microphone"))?,
+                let want = match &wanted {
+                    Some(w) => w.clone(),
+                    None => {
+                        let names: Vec<String> = host.input_devices()?.filter_map(|d| d.name().ok()).collect();
+                        let default = host.default_input_device().and_then(|d| d.name().ok());
+                        let pick = auto_pick_input(&names, default.as_deref()).ok_or_else(|| anyhow!("no real microphone found (only virtual inputs)"))?;
+                        if default.as_deref() != Some(pick.as_str()) {
+                            tracing::info!("default recording device {:?} is virtual; using '{pick}'", default.unwrap_or_default());
+                        }
+                        pick.to_lowercase()
+                    }
                 };
+                let dev = host
+                    .input_devices()?
+                    .find(|d| d.name().map(|n| n.to_lowercase().contains(&want)).unwrap_or(false))
+                    .ok_or_else(|| anyhow!("no input device matching '{want}'"))?;
                 let name = dev.name().unwrap_or_else(|_| "unknown".into());
                 let supported = dev.default_input_config().context("query input config")?;
                 let fmt = supported.sample_format();
@@ -105,6 +156,25 @@ impl MicCapture {
         self.shared.alive.load(Ordering::Relaxed)
     }
 
+    /// Current input level, 0..1 (decaying peak), for a level meter.
+    /// `Some(true)` once audio is flowing but every sample has been exactly
+    /// zero (Windows privacy setting blocking desktop apps, muted or dead
+    /// device). `None` until about a second of audio has arrived.
+    pub fn digital_silence(&self) -> Option<bool> {
+        let frames = self.shared.frames.load(Ordering::Relaxed);
+        if self.shared.any_signal.load(Ordering::Relaxed) {
+            Some(false)
+        } else if frames >= self.sample_rate as u64 {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
+    pub fn level(&self) -> f32 {
+        f32::from_bits(self.shared.level.load(Ordering::Relaxed))
+    }
+
     pub fn is_recording(&self) -> bool {
         self.shared.armed.load(Ordering::Relaxed)
     }
@@ -128,7 +198,15 @@ impl MicCapture {
 }
 
 fn push<T: Copy>(sh: &Shared, data: &[T], ch: usize, preroll_len: usize, max_clip: usize, conv: impl Fn(T) -> f32) {
-    let mono = data.chunks(ch.max(1)).map(|f| f.iter().map(|&v| conv(v)).sum::<f32>() / ch.max(1) as f32);
+    let mono: Vec<f32> = data.chunks(ch.max(1)).map(|f| f.iter().map(|&v| conv(v)).sum::<f32>() / ch.max(1) as f32).collect();
+    let peak = mono.iter().fold(0.0f32, |m, v| m.max(v.abs())).min(1.0);
+    let prev = f32::from_bits(sh.level.load(Ordering::Relaxed));
+    sh.level.store(peak.max(prev * 0.85).to_bits(), Ordering::Relaxed);
+    sh.frames.fetch_add(mono.len() as u64, Ordering::Relaxed);
+    if peak > 0.0 {
+        sh.any_signal.store(true, Ordering::Relaxed);
+    }
+    let mono = mono.into_iter();
     if sh.armed.load(Ordering::Relaxed) {
         if let Ok(mut c) = sh.clip.try_lock() {
             if c.len() < max_clip {
@@ -139,5 +217,26 @@ fn push<T: Copy>(sh: &Shared, data: &[T], ch: usize, preroll_len: usize, max_cli
         p.extend(mono);
         let excess = p.len().saturating_sub(preroll_len);
         p.drain(..excess);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_pick_skips_virtual_and_prefers_builtin_over_bluetooth() {
+        let names: Vec<String> = [
+            "Microphone (Steam Streaming Microphone)",
+            "Internal AUX Jack (Steam Streaming Speakers)",
+            "Headset (realme Buds T300)",
+            "Microphone Array (Intel® Smart Sound Technology for Digital Microphones)",
+        ]
+        .map(String::from)
+        .to_vec();
+        let pick = auto_pick_input(&names, Some("Internal AUX Jack (Steam Streaming Speakers)")).unwrap();
+        assert!(pick.starts_with("Microphone Array"), "{pick}");
+        assert_eq!(auto_pick_input(&names, Some("Headset (realme Buds T300)")).unwrap(), "Headset (realme Buds T300)", "a real default is respected");
+        assert!(auto_pick_input(&names[..2], None).is_none());
     }
 }

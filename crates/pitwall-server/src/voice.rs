@@ -23,6 +23,84 @@ pub enum VoiceCmd {
     Ptt(bool),
     /// A typed question.
     Ask(String),
+    /// Switch microphone (name substring; empty = auto-pick).
+    SetMic(String),
+}
+
+/// Where the chosen microphone is remembered between runs.
+pub const VOICE_SETTINGS: &str = "data/voice-settings.json";
+
+pub fn load_saved_mic() -> Option<String> {
+    let text = std::fs::read_to_string(VOICE_SETTINGS).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v["inputDevice"].as_str().map(str::to_string).filter(|s| !s.is_empty())
+}
+
+fn save_mic(name: &str) {
+    if let Some(dir) = std::path::Path::new(VOICE_SETTINGS).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(VOICE_SETTINGS, serde_json::json!({ "inputDevice": name }).to_string()) {
+        tracing::warn!("could not save microphone choice: {e}");
+    }
+}
+
+/// Start the local whisper.cpp server (`[stt] autostart`) when it is not
+/// already reachable. The child is killed when the returned handle drops.
+pub async fn autostart_whisper(stt: &SttClient) -> Option<tokio::process::Child> {
+    let cfg = stt.config();
+    if !cfg.autostart || cfg.engine != ai_sidecar::SttKind::Whispercpp || stt.health().await {
+        return None;
+    }
+    let exe = std::path::Path::new(&cfg.server_exe);
+    let model = std::path::Path::new(&cfg.server_model);
+    if !exe.exists() || !model.exists() {
+        tracing::warn!(
+            "speech-to-text offline and whisper.cpp not installed at {} / {} (see README: Hearing you)",
+            exe.display(),
+            model.display()
+        );
+        return None;
+    }
+    let url = cfg.url.trim_end_matches('/');
+    let hostport = url.rsplit("://").next().unwrap_or(url);
+    let (host, port) = hostport.rsplit_once(':').unwrap_or((hostport, "8178"));
+    let _ = std::fs::create_dir_all("data");
+    let log = std::fs::File::create("data/whisper-server.log").ok();
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.arg("-m")
+        .arg(model)
+        .args(["--host", host, "--port", port, "-t", &cfg.server_threads.to_string(), "-l", &cfg.language])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    match log.as_ref().and_then(|f| Some((f.try_clone().ok()?, f.try_clone().ok()?))) {
+        Some((out, err)) => {
+            cmd.stdout(out).stderr(err);
+        }
+        None => {
+            cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        }
+    }
+    #[cfg(windows)]
+    {
+        // No console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+    match cmd.spawn() {
+        Ok(child) => {
+            tracing::info!("started whisper.cpp speech-to-text on {host}:{port} (log: data/whisper-server.log)");
+            Some(child)
+        }
+        Err(e) => {
+            tracing::warn!("could not start whisper.cpp ({}): {e}", exe.display());
+            None
+        }
+    }
+}
+
+/// Lowest "UDP Action N" (1-12) pressed in a BUTN bit field.
+pub fn udp_action_pressed(status: u32) -> Option<u8> {
+    (1..=12u8).find(|&n| status & f1_udp::packets::udp_action_bit(n) != 0)
 }
 
 /// Status of the voice pipeline, shown in the comms state.
@@ -97,6 +175,10 @@ impl VoiceActor {
         let mut check = tokio::time::interval(Duration::from_millis(250));
         let mut last_health = 0u64;
         let mut status = VoiceStatus::default();
+        let mut last_level = -1.0f32;
+        let mut last_blocked: Option<bool> = None;
+        let mut level_tick = tokio::time::interval(Duration::from_millis(100));
+        let _ = self.comms.send(CommsCmd::MicDevice(self.mic.as_ref().map(|m| m.device_name().to_string()))).await;
         if self.llm.enabled() {
             let llm = self.llm.clone();
             tokio::spawn(async move {
@@ -113,7 +195,22 @@ impl VoiceActor {
             tokio::select! {
                 cmd = self.rx.recv() => {
                     let Some(cmd) = cmd else { break };
+                    if let VoiceCmd::Buttons(b) = &cmd {
+                        if let Some(n) = udp_action_pressed(*b) {
+                            if n == self.cfg.ptt_button {
+                                tracing::info!("wheel button: UDP Action {n} (push-to-talk)");
+                            } else {
+                                tracing::info!("wheel button: UDP Action {n} pressed, but push-to-talk is UDP Action {} ([voice] ptt_button)", self.cfg.ptt_button);
+                            }
+                            let _ = self.comms.send(CommsCmd::UdpAction(n)).await;
+                        }
+                    }
                     let edge = match cmd {
+                        VoiceCmd::SetMic(name) => {
+                            self.switch_mic(name).await;
+                            last_health = 0;
+                            None
+                        }
                         VoiceCmd::Buttons(b) if self.cfg.enabled => ptt.on_buttons(b),
                         VoiceCmd::Ptt(on) if self.cfg.enabled => ptt.set(on),
                         VoiceCmd::Buttons(_) | VoiceCmd::Ptt(_) => None,
@@ -131,6 +228,24 @@ impl VoiceActor {
                         None => {}
                     }
                 }
+                _ = level_tick.tick() => {
+                    let level = self.mic.as_ref().map(|m| m.level()).unwrap_or(0.0);
+                    if (level - last_level).abs() > 0.002 {
+                        last_level = level;
+                        let _ = self.comms.send(CommsCmd::MicLevel(level)).await;
+                    }
+                    let blocked = self.mic.as_ref().and_then(|m| m.digital_silence());
+                    if blocked.is_some() && blocked != last_blocked {
+                        last_blocked = blocked;
+                        if blocked == Some(true) {
+                            tracing::warn!(
+                                "microphone '{}' delivers pure silence. Windows may be blocking it: Settings > Privacy & security > Microphone > \"Let desktop apps access your microphone\" must be On",
+                                self.mic.as_ref().map(|m| m.device_name()).unwrap_or("?")
+                            );
+                        }
+                        let _ = self.comms.send(CommsCmd::MicBlocked(blocked == Some(true))).await;
+                    }
+                }
                 _ = check.tick() => {
                     let now = now_ms();
                     if ptt.active() && now.saturating_sub(started_ms) >= self.cfg.max_ptt_ms {
@@ -138,7 +253,9 @@ impl VoiceActor {
                         ptt.set(false);
                         self.end_transmit(now - started_ms, status).await;
                     }
-                    if now.saturating_sub(last_health) >= 15_000 {
+                    // Re-check quickly while something is down (e.g. whisper still starting).
+                    let every = if status.stt && status.llm && status.mic { 15_000 } else { 4_000 };
+                    if now.saturating_sub(last_health) >= every {
                         last_health = now;
                         let (stt, llm) = tokio::join!(self.stt.health(), self.llm.health());
                         let next = VoiceStatus { stt, llm, mic: self.mic.as_ref().is_some_and(|m| m.is_alive()) };
@@ -166,20 +283,55 @@ impl VoiceActor {
         }
     }
 
+    /// Tell the driver, on the radio, why we could not hear them.
+    async fn radio_problem(&self, text: &str) {
+        let _ = self.comms.send(CommsCmd::DriverAnswer { text: text.into(), source: RadioSource::Rule }).await;
+    }
+
+    async fn switch_mic(&mut self, name: String) {
+        let name = name.trim().to_string();
+        self.mic = None; // closes the old stream
+        let want = (!name.is_empty()).then(|| name.clone());
+        match tokio::task::spawn_blocking(move || MicCapture::start(want.as_deref())).await {
+            Ok(Ok(m)) => {
+                tracing::info!("microphone switched to '{}'", m.device_name());
+                let _ = self.comms.send(CommsCmd::MicBlocked(false)).await;
+                save_mic(&name);
+                let _ = self.comms.send(CommsCmd::MicDevice(Some(m.device_name().to_string()))).await;
+                self.mic = Some(m);
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("could not open microphone '{name}': {e:#}");
+                let _ = self.comms.send(CommsCmd::MicDevice(None)).await;
+            }
+            Err(e) => tracing::warn!("microphone task failed: {e}"),
+        }
+    }
+
     async fn end_transmit(&self, held_ms: u64, status: VoiceStatus) {
         let _ = self.comms.send(CommsCmd::PttActive(false)).await;
-        let Some(mic) = &self.mic else { return };
+        let Some(mic) = &self.mic else {
+            self.radio_problem("No microphone on the pit wall, we can't hear you. Pick one in the AI Engineer monitor.").await;
+            return;
+        };
         let clip = mic.end();
+        tracing::info!("push-to-talk released: {} ms held, {} ms recorded, level {:.3}", held_ms, clip.duration_ms(), clip.rms());
         if held_ms < self.cfg.min_ptt_ms || clip.duration_ms() < self.cfg.min_ptt_ms {
-            tracing::debug!("ignoring {held_ms} ms PTT blip");
+            tracing::info!("ignoring {held_ms} ms push-to-talk blip (hold the button while you talk)");
+            return;
+        }
+        if mic.digital_silence() == Some(true) {
+            self.radio_problem("We're getting nothing on your radio. Windows is blocking the microphone, check the privacy settings.").await;
             return;
         }
         if clip.rms() < 0.002 {
-            tracing::info!("PTT clip is silent (check the microphone / input device)");
+            tracing::info!("push-to-talk clip is silent on '{}'", mic.device_name());
+            self.radio_problem("We're getting nothing on your radio. Check the microphone.").await;
             return;
         }
         if !self.stt.enabled() {
             tracing::warn!("PTT clip recorded but speech-to-text is disabled ([stt] engine)");
+            self.radio_problem("Copy your transmission, but speech-to-text is switched off.").await;
             return;
         }
         let (stt, comms, llm, snap) = (self.stt.clone(), self.comms.clone(), self.llm.clone(), self.snapshot.clone());
@@ -193,7 +345,10 @@ impl VoiceActor {
                 Some(_) => {
                     let _ = comms.send(CommsCmd::DriverAnswer { text: answers::SAY_AGAIN.into(), source: RadioSource::Rule }).await;
                 }
-                None => {}
+                None => {
+                    let text = "Radio problem, we can't hear you. The speech server is down.".to_string();
+                    let _ = comms.send(CommsCmd::DriverAnswer { text, source: RadioSource::Rule }).await;
+                }
             }
             let _ = comms.send(CommsCmd::Thinking(false)).await;
         });
@@ -264,6 +419,14 @@ async fn answer(question: String, comms: &mpsc::Sender<CommsCmd>, llm: &LlmClien
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn udp_action_numbers() {
+        assert_eq!(udp_action_pressed(0), None);
+        assert_eq!(udp_action_pressed(0x0010_0000), Some(1));
+        assert_eq!(udp_action_pressed(0x0020_0000 | 0x1), Some(2));
+        assert_eq!(udp_action_pressed(0x8000_0000), Some(12));
+    }
 
     #[test]
     fn hold_mode_follows_the_button() {

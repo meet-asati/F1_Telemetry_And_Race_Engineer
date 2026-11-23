@@ -36,11 +36,28 @@ pub struct SttConfig {
     pub model: String,
     pub language: String,
     pub timeout_ms: u64,
+    /// Start a local whisper.cpp server automatically if none is running.
+    pub autostart: bool,
+    /// whisper-server executable used by `autostart`.
+    pub server_exe: String,
+    /// Model file used by `autostart`.
+    pub server_model: String,
+    pub server_threads: u32,
 }
 
 impl Default for SttConfig {
     fn default() -> Self {
-        Self { engine: SttKind::Whispercpp, url: "http://127.0.0.1:8178".into(), model: "Systran/faster-whisper-base.en".into(), language: "en".into(), timeout_ms: 8000 }
+        Self {
+            engine: SttKind::Whispercpp,
+            url: "http://127.0.0.1:8178".into(),
+            model: "Systran/faster-whisper-base.en".into(),
+            language: "en".into(),
+            timeout_ms: 8000,
+            autostart: true,
+            server_exe: "sidecars/whisper/bin/Release/whisper-server.exe".into(),
+            server_model: "sidecars/whisper/models/ggml-base.en.bin".into(),
+            server_threads: 4,
+        }
     }
 }
 
@@ -63,6 +80,10 @@ impl SttClient {
 
     pub fn enabled(&self) -> bool {
         self.cfg.engine != SttKind::None
+    }
+
+    pub fn config(&self) -> &SttConfig {
+        &self.cfg
     }
 
     pub async fn health(&self) -> bool {

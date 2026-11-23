@@ -83,7 +83,7 @@ whisper.cpp (CPU build) and the `ggml-base.en` model live in `sidecars/whisper/`
 1. Extract `whisper-bin-x64.zip` from the whisper.cpp GitHub releases into `sidecars/whisper/bin`.
 2. Put `ggml-base.en.bin` from huggingface.co/ggerganov/whisper.cpp in `sidecars/whisper/models`.
 
-Start it before a session:
+The daemon starts it automatically when nothing is listening on `:8178` (`[stt] autostart`, log in `data/whisper-server.log`). To run it yourself:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\start-whisper.ps1
@@ -113,6 +113,18 @@ ollama pull qwen2.5:3b
 Run `pitwall-server --list-audio-devices` to see speaker and microphone names for `[audio] device` and `[voice] input_device`. Set `[comms] driver_name` so the engineer can use your first name now and then.
 
 Check it is all up in the AI Engineer monitor: **MIC**, **SPEECH-TO-TEXT**, **LLM** and **VOICE** should all read ready.
+
+#### Push-to-talk troubleshooting (AI Engineer monitor → Driver voice)
+
+| Symptom | Fix |
+| :--- | :--- |
+| The level meter doesn't move when you speak | Pick another microphone in the dropdown; the choice is remembered. Virtual devices (Steam Streaming, Stereo Mix) are greyed out. |
+| "This microphone sends pure silence" | Windows is blocking desktop apps: **Settings → Privacy & security → Microphone → Let desktop apps access your microphone**. |
+| "Waiting for a press of UDP Action 1" never changes while you press the button | The game isn't sending it. Check **Settings → Telemetry → UDP Telemetry On** and that the button is bound to **UDP Action 1** under Controls (in the action list, not just the menu shortcut). |
+| "Game sent UDP Action 3, but push-to-talk listens to UDP Action 1" | Re-bind the button, or set `[voice] ptt_button = 3`. |
+| The engineer says "the speech server is down" | whisper.cpp isn't running and couldn't be auto-started; see step 2. |
+
+The server log also prints every wheel button press and each push-to-talk clip (`push-to-talk released: … ms held, level …`).
 
 ## Friend on the pit wall (Tailscale)
 

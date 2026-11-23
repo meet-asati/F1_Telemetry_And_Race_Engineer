@@ -5,6 +5,8 @@
   import RadioComposer from '$lib/components/RadioComposer.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import PushToTalk from '$lib/components/PushToTalk.svelte';
+  import MicMeter from '$lib/components/MicMeter.svelte';
+  import { onMount } from 'svelte';
 
   let { snap, mode }: { snap: TelemetrySnapshot; mode: 'tile' | 'inspect' } = $props();
 
@@ -17,6 +19,25 @@
   function ask(q: string) {
     if (pitwall.ask(q)) question = '';
   }
+
+  // Microphone picker (inspect view only).
+  let mics = $state<{ name: string; virtual: boolean }[]>([]);
+  onMount(async () => {
+    if (mode !== 'inspect') return;
+    try {
+      const r = await fetch('/api/audio/inputs');
+      if (r.ok) mics = (await r.json()).devices;
+    } catch {
+      /* offline */
+    }
+  });
+  const wheel = $derived(
+    c.lastUdpAction == null
+      ? { cls: 'idle', text: `Waiting for a press of UDP Action ${c.pttButton || 1} from the game` }
+      : c.lastUdpAction === c.pttButton
+        ? { cls: 'ok', text: `Wheel push-to-talk working (UDP Action ${c.lastUdpAction})` }
+        : { cls: 'bad', text: `Game sent UDP Action ${c.lastUdpAction}, but push-to-talk listens to UDP Action ${c.pttButton}. Re-map the button or set [voice] ptt_button = ${c.lastUdpAction}.` }
+  );
 
   const log = $derived(pitwall.radioLog.filter((r) => filter === 'all' || r.source === filter));
 
@@ -64,6 +85,7 @@
     </div>
     <div class="row dim small">
       <span>PTT <b class:on={c.pttActive}>{c.pttActive ? 'LIVE' : c.micAvailable ? 'READY' : 'NO MIC'}</b></span>
+      <span class="mini-meter"><MicMeter level={c.micLevel} compact /></span>
       <span>STT <b class:on={c.sttAvailable}>{c.sttAvailable ? 'OK' : 'OFF'}</b></span>
       <span>LLM <b class:on={c.llmAvailable}>{c.llmAvailable ? 'OK' : 'OFF'}</b></span>
       <span>VOICE <b class:on={c.ttsAvailable}>{c.ttsAvailable ? 'OK' : 'TEXT'}</b></span>
@@ -122,6 +144,30 @@
         <span class="chip" class:ok={c.ttsAvailable}>VOICE {c.ttsAvailable ? 'KOKORO READY' : 'TEXT ONLY'}</span>
         {#if c.thinking}<span class="chip thinking">ENGINEER THINKING…</span>{/if}
       </div>
+      <div class="mic-row">
+        <label class="label" for="mic-select">Microphone</label>
+        <select
+          id="mic-select"
+          value={c.micDevice ?? ''}
+          onchange={(e) => pitwall.send({ type: 'voice.setMic', device: (e.currentTarget as HTMLSelectElement).value })}
+        >
+          {#if !c.micDevice}<option value="">— none open —</option>{/if}
+          {#each mics as m}
+            <option value={m.name} disabled={m.virtual}>{m.name}{m.virtual ? ' (virtual, not a mic)' : ''}</option>
+          {/each}
+          {#if c.micDevice && !mics.some((m) => m.name === c.micDevice)}<option value={c.micDevice}>{c.micDevice}</option>{/if}
+        </select>
+        <div class="meter-wrap"><MicMeter level={c.micLevel} /></div>
+      </div>
+      {#if c.micBlocked}
+        <p class="wheel bad">
+          This microphone sends pure silence. Windows is probably blocking it: Settings → Privacy &amp; security → Microphone → turn on “Let desktop apps access
+          your microphone”, then pick the mic again.
+        </p>
+      {:else}
+        <p class="hint">Speak now: the meter should move. If it stays flat, pick another microphone.</p>
+      {/if}
+      <p class="wheel {wheel.cls}">{wheel.text}</p>
       <div class="voice-row">
         <PushToTalk />
         <form class="ask" onsubmit={(e) => (e.preventDefault(), ask(question))}>
@@ -133,7 +179,7 @@
         {#each QUICK_QUESTIONS as q}<button onclick={() => ask(q)}>{q}</button>{/each}
       </div>
       <p class="faint hint">
-        In the game, map a wheel button to <b>UDP Action 1</b> (Controls) and hold it to talk. Gaps, tyres, fuel, pace and box calls are answered from telemetry
+        In the game, map a wheel button to <b>UDP Action {c.pttButton || 1}</b> (Controls) and hold it to talk. Gaps, tyres, fuel, pace and box calls are answered from telemetry
         instantly; anything else goes to the local LLM.
       </p>
     </section>
@@ -254,6 +300,41 @@
   }
   .quick button {
     font-size: 12px;
+  }
+  .mic-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .mic-row select {
+    min-width: 280px;
+    max-width: 100%;
+  }
+  .meter-wrap {
+    flex: 1;
+    min-width: 160px;
+  }
+  .mini-meter {
+    width: 44px;
+  }
+  .wheel {
+    margin: 0;
+    font-size: 12.5px;
+    padding: 6px 8px;
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+  }
+  .wheel.ok {
+    color: var(--data);
+    border-color: rgba(77, 250, 154, 0.5);
+  }
+  .wheel.bad {
+    color: var(--watch);
+    border-color: var(--watch);
+  }
+  .wheel.idle {
+    color: var(--text-dim);
   }
   .voice-row {
     display: flex;

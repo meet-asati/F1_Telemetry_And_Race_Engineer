@@ -299,6 +299,16 @@ pub struct CommsState {
     pub mic_available: bool,
     /// The engineer is working on an answer (transcribing / LLM).
     pub thinking: bool,
+    /// Live microphone input level, 0..1 (for a level meter).
+    pub mic_level: f32,
+    /// The microphone in use.
+    pub mic_device: Option<String>,
+    /// The mic delivers pure digital silence (access blocked / muted / dead).
+    pub mic_blocked: bool,
+    /// Configured push-to-talk wheel button ("UDP Action N").
+    pub ptt_button: u8,
+    /// The last "UDP Action N" button the game reported (diagnostics).
+    pub last_udp_action: Option<u8>,
     pub speaking: bool,
     pub last_spoken_line: Option<String>,
     /// The driver's last transcribed radio message.
@@ -417,6 +427,9 @@ pub enum ClientCommand {
     /// A typed question, answered as if the driver had asked it on the radio.
     #[serde(rename = "driver.ask")]
     DriverAsk { text: String, token: Option<String> },
+    /// Switch the push-to-talk microphone (empty = auto-pick).
+    #[serde(rename = "voice.setMic")]
+    VoiceSetMic { device: String, token: Option<String> },
     #[serde(rename = "select.car", rename_all = "camelCase")]
     SelectCar { car_index: u8 },
 }
@@ -431,7 +444,8 @@ impl ClientCommand {
             | ClientCommand::CommsSetMode { token, .. }
             | ClientCommand::CommsMute { token, .. }
             | ClientCommand::PttSet { token, .. }
-            | ClientCommand::DriverAsk { token, .. } => token.as_deref(),
+            | ClientCommand::DriverAsk { token, .. }
+            | ClientCommand::VoiceSetMic { token, .. } => token.as_deref(),
             ClientCommand::SelectCar { .. } => None,
         }
     }

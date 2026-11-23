@@ -34,6 +34,7 @@ pub fn router(state: AppState, ui_dir: PathBuf) -> Router {
         .route("/api/sessions/{id}/radio", get(session_radio))
         .route("/api/track-outline/{track_id}", get(track_outline).delete(delete_outline))
         .route("/api/radio", post(post_radio))
+        .route("/api/audio/inputs", get(audio_inputs))
         .with_state(state);
     let index = ui_dir.join("index.html");
     if index.exists() {
@@ -217,4 +218,11 @@ async fn post_radio(State(state): State<AppState>, headers: HeaderMap, Json(body
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "comms unavailable").into_response(),
     }
+}
+
+/// Microphones available for push-to-talk (virtual devices flagged).
+async fn audio_inputs() -> Json<serde_json::Value> {
+    let names = tokio::task::spawn_blocking(voice_comms::list_input_devices).await.unwrap_or_default();
+    let devices: Vec<serde_json::Value> = names.iter().map(|n| serde_json::json!({ "name": n, "virtual": voice_comms::is_virtual_input(n) })).collect();
+    Json(serde_json::json!({ "devices": devices }))
 }

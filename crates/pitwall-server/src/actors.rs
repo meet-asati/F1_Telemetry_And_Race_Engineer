@@ -86,6 +86,11 @@ pub enum CommsCmd {
     DriverAnswer { text: String, source: RadioSource },
     Thinking(bool),
     VoiceStatus(VoiceStatus),
+    MicLevel(f32),
+    MicBlocked(bool),
+    MicDevice(Option<String>),
+    /// A wheel "UDP Action N" button was pressed (diagnostics).
+    UdpAction(u8),
 }
 
 // ------------------------------------------------------------ state actor
@@ -228,6 +233,8 @@ pub struct CommsActor {
     pub cfg: ArbConfig,
     pub rules: RuleConfig,
     pub voice: mpsc::Sender<VoiceCmd>,
+    /// Configured "UDP Action N" for push-to-talk (shown in the UI).
+    pub ptt_button: u8,
     pub initial_mode: CommsMode,
     pub rx: mpsc::Receiver<CommsCmd>,
     pub snapshot: watch::Receiver<Arc<TelemetrySnapshot>>,
@@ -264,6 +271,10 @@ impl CommsActor {
         let mut voice_status = VoiceStatus::default();
         let mut thinking = false;
         let mut last_driver_line: Option<String> = None;
+        let mut mic_level = 0.0f32;
+        let mut mic_blocked = false;
+        let mut mic_device: Option<String> = None;
+        let mut last_udp_action: Option<u8> = None;
         let mut arb = Arbitrator::new(self.cfg.clone());
         arb.set_mode(self.initial_mode);
         let mut tick = tokio::time::interval(Duration::from_millis(50));
@@ -294,6 +305,7 @@ impl CommsActor {
                                     let _ = self.voice.try_send(VoiceCmd::Ask(text));
                                 }
                             }
+                            ClientCommand::VoiceSetMic { device, .. } => { let _ = self.voice.try_send(VoiceCmd::SetMic(device)); }
                             ClientCommand::SelectCar { .. } => {}
                         },
                         CommsCmd::RaceEvent(e) => {
@@ -314,6 +326,10 @@ impl CommsActor {
                         CommsCmd::DriverAnswer { text, source } => { arb.driver_answer(text, source, now); }
                         CommsCmd::Thinking(v) => thinking = v,
                         CommsCmd::VoiceStatus(v) => voice_status = v,
+                        CommsCmd::MicLevel(v) => mic_level = v,
+                        CommsCmd::MicBlocked(v) => mic_blocked = v,
+                        CommsCmd::MicDevice(d) => mic_device = d,
+                        CommsCmd::UdpAction(n) => last_udp_action = Some(n),
                     }
                 }
                 _ = tick.tick() => {
@@ -348,6 +364,11 @@ impl CommsActor {
                     st.mic_available = voice_status.mic;
                     st.thinking = thinking;
                     st.last_driver_line = last_driver_line.clone();
+                    st.mic_level = (mic_level * 1000.0).round() / 1000.0;
+                    st.mic_blocked = mic_blocked;
+                    st.mic_device = mic_device.clone();
+                    st.ptt_button = self.ptt_button;
+                    st.last_udp_action = last_udp_action;
                     self.state_out.send_if_modified(|cur| {
                         let changed = *cur != st;
                         if changed { *cur = st; }
