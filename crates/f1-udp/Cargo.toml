@@ -1,0 +1,10 @@
+[package]
+name = "f1-udp"
+description = "Multi-format (F1 22/23/24/25) UDP telemetry codec, recorder and replay"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
