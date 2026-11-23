@@ -11,7 +11,8 @@ import Comms from './Comms.svelte';
 export interface MonitorDef {
   id: MonitorId;
   title: string;
-  icon: string;
+  /** Short channel number shown on the bezel. */
+  channel: string;
   component: Component<{ snap: TelemetrySnapshot; mode: 'tile' | 'inspect' }>;
   alert: (s: TelemetrySnapshot) => { level: AlertLevel; reason: string | null };
 }
@@ -22,7 +23,7 @@ export const MONITORS: Record<MonitorId, MonitorDef> = {
   timing: {
     id: 'timing',
     title: 'Timing & Gaps',
-    icon: '⏱',
+    channel: '01',
     component: Timing,
     alert: (s) => {
       const p = s.timing.entries.find((e) => e.isPlayer);
@@ -34,7 +35,7 @@ export const MONITORS: Record<MonitorId, MonitorDef> = {
   track: {
     id: 'track',
     title: 'Track Map',
-    icon: '🗺',
+    channel: '02',
     component: Track,
     alert: (s) => {
       if (s.session.marshalZones.some((z) => z.flag === 'red')) return { level: 'critical', reason: 'Red flag' };
@@ -42,19 +43,19 @@ export const MONITORS: Record<MonitorId, MonitorDef> = {
       return nominal;
     }
   },
-  tyres: { id: 'tyres', title: 'Tyres & Thermal', icon: '◎', component: Tyres, alert: (s) => ({ level: s.tyres.alertLevel, reason: s.tyres.alertReason }) },
+  tyres: { id: 'tyres', title: 'Tyres & Thermal', channel: '03', component: Tyres, alert: (s) => ({ level: s.tyres.alertLevel, reason: s.tyres.alertReason }) },
   power: {
     id: 'power',
     title: 'Power Unit · ERS · Fuel',
-    icon: '⚡',
+    channel: '04',
     component: Power,
     alert: (s) => ({ level: s.powertrain.alertLevel, reason: s.powertrain.alertReason })
   },
-  damage: { id: 'damage', title: 'Damage & Brakes', icon: '🛠', component: Damage, alert: (s) => ({ level: s.damage.alertLevel, reason: s.damage.alertReason }) },
+  damage: { id: 'damage', title: 'Damage & Brakes', channel: '05', component: Damage, alert: (s) => ({ level: s.damage.alertLevel, reason: s.damage.alertReason }) },
   weather: {
     id: 'weather',
     title: 'Weather & Session',
-    icon: '☁',
+    channel: '06',
     component: Weather,
     alert: (s) => {
       const sc = s.session.safetyCarStatus;
@@ -70,7 +71,7 @@ export const MONITORS: Record<MonitorId, MonitorDef> = {
   comms: {
     id: 'comms',
     title: 'AI Engineer & Copilot',
-    icon: '🎙',
+    channel: '07',
     component: Comms,
     alert: (s) => {
       const n = s.comms.pendingSuggestions.length;

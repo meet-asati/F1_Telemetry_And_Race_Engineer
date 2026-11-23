@@ -84,7 +84,7 @@
         {#if h.label}<text x={W - pad.r - 4} y={sy(h.y) - 4} text-anchor="end" class="tick" style="fill:{h.color}">{h.label}</text>{/if}
       {/each}
       {#each series as s}
-        <path d={path(s.points)} style="stroke:{s.color}" fill="none" stroke-width="1.8" stroke-dasharray={s.dashed ? '5 4' : undefined} vector-effect="non-scaling-stroke" />
+        <path d={path(s.points)} style="stroke:{s.color};filter:drop-shadow(0 0 2px {s.color})" fill="none" stroke-width="1.8" stroke-dasharray={s.dashed ? '5 4' : undefined} vector-effect="non-scaling-stroke" />
       {/each}
     </svg>
     <figcaption>
@@ -131,7 +131,7 @@
     place-items: center;
     color: var(--text-faint);
     border: 1px dashed var(--hairline);
-    border-radius: 6px;
+    border-radius: 2px;
     font-size: 12px;
   }
 </style>

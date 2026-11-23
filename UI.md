@@ -18,9 +18,12 @@
 
 The UI models an **F1 pit-wall monitor stand**: a structured, high-contrast command surface. Your friend can scan the critical race domains at a glance, then click **any monitor** (or metric or car) to open a deep-dive inspection view.
 
-- **Dark Pit-Wall Aesthetic.**
-  - Low-glare charcoal/slate backgrounds: `#0B0E14` canvas, `#121722` monitor bezel, `#181F2E` elevated surface.
-  - Crisp hairline borders: `1px solid rgba(255,255,255,0.08)`.
+- **Physical Pit-Wall Look.** The page is the wall itself, and every domain is a real monitor mounted on it.
+  - **Wall:** a carbon-fibre background with gunmetal uprights, a rail above each row of monitors and a desk ledge with a team-red accent line. The top bar is the overhead header panel.
+  - **Monitors:** a gunmetal bezel, a mounting arm up to the rail, and a chin with the channel number (`PW · 03`) and a power LED that turns amber/red with the alert state.
+  - **Screens:** near-black glass (`#02070A`) with a faint telemetry grid, light scanlines and a glass reflection. Ink is phosphor green (`#4DFA9A`) for data, cyan (`#22D3EE`) for headings and accents, amber for watch, red for critical.
+  - **Telemetry styling:** wireframe top-down car diagrams, glowing traces and dense monospace columns, in the style of real team pit-wall screens.
+  - **No emoji.** Icons are inline SVG line icons in the screen ink colour.
 - **Tabular Precision.** Use a monospace font or `font-variant-numeric: tabular-nums` for lap times, gaps, temperatures, wear percentages and ERS/fuel deltas, so numbers never jitter as values tick at `15Hz`.
 - **Semantic Alert States (`Nominal` | `Watch` | `Critical`).** Each state is always conveyed by **icon + text + color**, never color alone, so it works for color-blind users.
   - **Nominal:** Calm neutral/teal/slate indicators. No visual noise.
@@ -55,7 +58,7 @@ The UI models an **F1 pit-wall monitor stand**: a structured, high-contrast comm
 ### 2.2 Multi-Monitor Stand Grid
 
 - **Monitor Tiles.** Each telemetry domain renders as a self-contained monitor card with:
-  - the monitor title, a domain icon and the `Nominal` / `Watch` / `Critical` badge;
+  - a channel number (`01`–`07`), the monitor title and the `Nominal` / `Watch` / `Critical` badge;
   - compact, high-signal summary metrics designed for fast scanning.
 - **Click anywhere on the tile** to open the **Monitor Inspector** for that domain.
 - **Pop-Out Button** on each tile header opens that monitor in a standalone browser window (`/monitor/:id`), which is useful for multi-monitor setups.
@@ -63,9 +66,9 @@ The UI models an **F1 pit-wall monitor stand**: a structured, high-contrast comm
   - Pop-outs share the selected car and the layout state with the main window via `BroadcastChannel`.
   - Each window keeps its own WebSocket.
 
-### 2.3 Click-to-Inspect Drawer / Focus Modal
+### 2.3 Click-to-Inspect Monitor Popup
 
-Clicking a monitor opens a dedicated **Inspector View** for that domain, containing:
+Clicking a monitor opens it as a large **in-window popup monitor** (same bezel and screen, about 94% of the window, over a blurred stand). `Esc`, the scrim or **Close** dismisses it; **Pop out** moves it to its own browser window. The popup contains:
 
 1. **Full Telemetry Breakdown:** Every relevant field for that system, showing the current value, the previous lap and rolling averages.
 2. **Historical & Comparative Curves:** Lap-by-lap progression, stint comparisons or per-corner values. History comes from `GET /api/sessions/:id/laps`.
@@ -106,12 +109,14 @@ Clicking a monitor opens a dedicated **Inspector View** for that domain, contain
 ### Monitor 2: Live Track & Sector Map
 
 - **Tile Summary:**
-  - A `<canvas>` circuit outline built from Motion world coordinates (`worldPositionX`, `worldPositionZ`; Y is up).
+  - A `<canvas>` circuit outline built from Motion world coordinates (`worldPositionX`, `worldPositionZ`; Y is up). World +Z points up the map.
   - Live car dots, with the player car highlighted.
   - Per-zone flag markers from `marshalZones[]`.
+  - Readouts for lap, last/best lap and delta, and the player's speed, gear and DRS.
+  - A rolling 30-second trace of the player's throttle, brake and speed under the map.
 - **Outline source:**
-  - The outline comes from the player's first clean lap and is cached per track (`GET /api/track-outline/:trackId`).
-  - Until an outline exists, the map draws accumulated car positions as a faint point cloud.
+  - The server bins every running car's position by lap distance. Once 97% of the bins are filled (about one lap of green running with a full grid), it stores the outline per track (`GET /api/track-outline/:trackId`). The player does not need a clean lap.
+  - Until then, the browser builds the same binned outline live from the snapshots, so the track draws in progressively within seconds.
 - **Click-to-Inspect View:**
   - A zoomable, pannable track canvas with a color-mode selector (`Positions`, `Speed`, `Throttle/Brake`, `ERS Deploy`).
   - A telemetry readout for the selected car: speed, gear, throttle/brake bars, ERS deploy state, lap distance %.

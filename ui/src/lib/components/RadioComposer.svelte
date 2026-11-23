@@ -1,5 +1,6 @@
 <script lang="ts">
   import { pitwall } from '$lib/store.svelte';
+  import Icon from './Icon.svelte';
 
   let {
     presets = [],
@@ -37,7 +38,7 @@
   {#if presets.length}
     <div class="presets">
       {#each presets as p}
-        <button onclick={() => send(p)} title="Send now">📻 {p}</button>
+        <button onclick={() => send(p)} title="Send now"><Icon name="radio" size={12} /> {p}</button>
       {/each}
     </div>
   {/if}
@@ -53,7 +54,7 @@
     <input bind:value={text} onkeydown={onKey} {placeholder} aria-label="Radio message" />
     <button class="primary" disabled={!text.trim()} onclick={() => send(text)}>Send to radio</button>
   </div>
-  {#if sentFlash}<div class="sent">✓ Sent: “{sentFlash}”</div>{/if}
+  {#if sentFlash}<div class="sent"><Icon name="check" size={12} /> Sent: “{sentFlash}”</div>{/if}
 </div>
 
 <style>
@@ -64,7 +65,7 @@
     padding: 10px;
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
-    background: var(--bezel);
+    background: rgba(4, 16, 22, 0.6);
   }
   .presets,
   .context {

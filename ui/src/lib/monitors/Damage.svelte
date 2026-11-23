@@ -2,13 +2,15 @@
   import { CORNERS, tempColor } from '$lib/format';
   import type { TelemetrySnapshot } from '$lib/types';
   import RadioComposer from '$lib/components/RadioComposer.svelte';
+  import CarWireframe from '$lib/components/CarWireframe.svelte';
 
   let { snap, mode }: { snap: TelemetrySnapshot; mode: 'tile' | 'inspect' } = $props();
 
   const d = $derived(snap.damage);
   const brakes = $derived(snap.tyres.brakeTempC);
   const peakBrake = $derived(Math.max(...brakes));
-  const dmgColor = (v: number) => (v >= 30 ? 'var(--crit)' : v >= 10 ? 'var(--watch)' : v > 0 ? '#a3e635' : '#334155');
+  const dmgColor = (v: number) => (v >= 30 ? 'var(--crit)' : v >= 10 ? 'var(--watch)' : v > 0 ? 'var(--warm)' : 'var(--data)');
+  const tintOf = (v: number) => (v > 0 ? dmgColor(v) : null);
   const parts = $derived([
     ['FL wing', d.frontLeftWingPct],
     ['FR wing', d.frontRightWingPct],
@@ -20,26 +22,19 @@
 </script>
 
 {#snippet carDiagram(size: number)}
-  <svg viewBox="0 0 120 240" width={size * 0.5} height={size} role="img" aria-label="Chassis damage diagram">
-    <!-- front wing -->
-    <rect x="10" y="8" width="48" height="14" rx="3" fill={dmgColor(d.frontLeftWingPct)} />
-    <rect x="62" y="8" width="48" height="14" rx="3" fill={dmgColor(d.frontRightWingPct)} />
-    <!-- nose + chassis -->
-    <path d="M52 22 L68 22 L72 70 L48 70 Z" fill="#1e293b" stroke="#475569" />
-    <!-- sidepods -->
-    <rect x="26" y="90" width="18" height="70" rx="6" fill={dmgColor(d.sidepodPct)} />
-    <rect x="76" y="90" width="18" height="70" rx="6" fill={dmgColor(d.sidepodPct)} />
-    <!-- floor -->
-    <rect x="44" y="70" width="32" height="120" rx="6" fill={dmgColor(d.floorPct)} />
-    <!-- diffuser -->
-    <path d="M40 190 L80 190 L86 208 L34 208 Z" fill={dmgColor(d.diffuserPct)} />
-    <!-- rear wing -->
-    <rect x="18" y="214" width="84" height="16" rx="3" fill={dmgColor(d.rearWingPct)} />
-    <!-- wheels with brake temps -->
-    {#each [[6, 40], [96, 40], [6, 160], [96, 160]] as [x, y], i}
-      <rect {x} {y} width="18" height="36" rx="4" fill="#0b0e14" style="stroke:{tempColor(brakes[i], 300, 1000)}" stroke-width="2.5" />
-    {/each}
-  </svg>
+  <CarWireframe
+    height={size}
+    label="Chassis damage and brake temperatures"
+    parts={{
+      frontLeftWing: tintOf(d.frontLeftWingPct),
+      frontRightWing: tintOf(d.frontRightWingPct),
+      rearWing: tintOf(d.rearWingPct),
+      floor: tintOf(d.floorPct),
+      diffuser: tintOf(d.diffuserPct),
+      sidepods: tintOf(d.sidepodPct)
+    }}
+    wheels={brakes.map((b) => tempColor(b, 300, 1000))}
+  />
 {/snippet}
 
 {#if mode === 'tile'}
@@ -47,7 +42,7 @@
     {@render carDiagram(150)}
     <div class="list num">
       {#each parts.slice(0, 5) as [n, v]}
-        <span class="dim">{n}</span><span style="color:{v ? dmgColor(v) : 'var(--text-dim)'}">{v}%</span>
+        <span class="dim">{n}</span><span style="color:{dmgColor(v)}">{v}%</span>
       {/each}
       <span class="dim">Brakes peak</span><span style="color:{tempColor(peakBrake, 300, 1000)}">{peakBrake}°C</span>
       {#if d.drsFault}<span class="crit" style="grid-column: span 2">DRS FAULT</span>{/if}
@@ -109,6 +104,11 @@
     align-items: center;
     height: 100%;
   }
+  .tile > :global(svg) {
+    height: 100%;
+    width: auto;
+    max-height: 190px;
+  }
   .list {
     display: grid;
     grid-template-columns: auto auto;
@@ -147,11 +147,6 @@
   .diagram {
     display: grid;
     place-items: center;
-  }
-  .panel {
-    padding: 10px;
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
   }
   .brakes {
     display: grid;

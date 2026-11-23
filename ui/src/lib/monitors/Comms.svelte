@@ -3,6 +3,7 @@
   import { timeOfDay } from '$lib/format';
   import type { RadioEvent, Suggestion, TelemetrySnapshot } from '$lib/types';
   import RadioComposer from '$lib/components/RadioComposer.svelte';
+  import Icon from '$lib/components/Icon.svelte';
 
   let { snap, mode }: { snap: TelemetrySnapshot; mode: 'tile' | 'inspect' } = $props();
 
@@ -24,7 +25,7 @@
   function remaining(s: Suggestion) {
     return Math.max(0, Math.ceil((s.expiresAtMs - pitwall.now) / 1000));
   }
-  const SOURCE: Record<RadioEvent['source'], string> = { friend: '👤 Engineer', rule: '🤖 AI rule', llm: '🧠 AI answer', driver: '🎧 Driver' };
+  const SOURCE: Record<RadioEvent['source'], string> = { friend: 'ENGINEER', rule: 'AI RULE', llm: 'AI ANSWER', driver: 'DRIVER' };
   const OUTCOME: Record<RadioEvent['outcome'], string> = {
     spoken: 'spoken',
     queued: 'queued',
@@ -46,12 +47,12 @@
       <span class="n num">{c.pendingSuggestions.length}</span> pending suggestion{c.pendingSuggestions.length === 1 ? '' : 's'}
     </div>
     <div class="last">
-      <div class="label">Last on radio {c.speaking ? '· 🔊 speaking' : ''}</div>
+      <div class="label">Last on radio {#if c.speaking}<span class="speaking">· ON AIR</span>{/if}</div>
       <div class="line">{c.lastSpokenLine ?? '—'}</div>
     </div>
     <div class="row dim small">
-      <span>PTT {c.pttActive ? '🔴 live' : 'idle'}</span>
-      <span>TTS {c.ttsAvailable ? '✓ ready' : '✗ text only'}</span>
+      <span>PTT <b class:on={c.pttActive}>{c.pttActive ? 'LIVE' : 'IDLE'}</b></span>
+      <span>TTS <b class:on={c.ttsAvailable}>{c.ttsAvailable ? 'READY' : 'TEXT ONLY'}</b></span>
     </div>
   </div>
 {:else}
@@ -60,7 +61,7 @@
       <span class="label">Mode</span>
       <button class:active={c.mode === 'auto'} onclick={() => pitwall.send({ type: 'comms.setMode', mode: 'auto' })}>Auto-Speak</button>
       <button class:active={c.mode === 'copilot'} onclick={() => pitwall.send({ type: 'comms.setMode', mode: 'copilot' })}>Copilot Approval</button>
-      <button class:active={c.muted} onclick={() => pitwall.send({ type: 'comms.mute', muted: !c.muted })}>{c.muted ? '🔇 AI muted' : '🔊 AI audible'}</button>
+      <button class:active={c.muted} onclick={() => pitwall.send({ type: 'comms.mute', muted: !c.muted })}><Icon name={c.muted ? 'mute' : 'volume'} />{c.muted ? 'AI muted' : 'AI audible'}</button>
       {#if c.friendOverrideActive}<span class="chip override num">Friend override {Math.ceil(c.overrideRemainingMs / 1000)}s — AI P2 held</span>{/if}
     </div>
 
@@ -89,9 +90,9 @@
               <button class="primary" onclick={() => sendEdit(s)}>Send edited</button>
               <button onclick={() => (editing = null)}>Cancel</button>
             {:else}
-              <button class="primary" onclick={() => pitwall.send({ type: 'suggestion.approve', id: s.id })}>✓ Approve &amp; speak</button>
-              <button onclick={() => startEdit(s)}>✎ Edit &amp; send</button>
-              <button class="danger" onclick={() => pitwall.send({ type: 'suggestion.dismiss', id: s.id })}>✕ Dismiss</button>
+              <button class="primary" onclick={() => pitwall.send({ type: 'suggestion.approve', id: s.id })}><Icon name="check" /> Approve &amp; speak</button>
+              <button onclick={() => startEdit(s)}><Icon name="edit" /> Edit &amp; send</button>
+              <button class="danger" onclick={() => pitwall.send({ type: 'suggestion.dismiss', id: s.id })}><Icon name="close" /> Dismiss</button>
             {/if}
           </div>
         </div>
@@ -184,6 +185,27 @@
     font-size: 12px;
     justify-content: space-between;
   }
+  .small b {
+    font-family: var(--cond);
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+  }
+  .small b.on {
+    color: var(--data);
+  }
+  .speaking {
+    color: var(--crit);
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  .line {
+    font-family: var(--mono);
+    color: var(--data);
+  }
   .inspect {
     display: flex;
     flex-direction: column;
@@ -253,8 +275,11 @@
     min-width: 200px;
   }
   .src {
-    color: var(--text-dim);
-    min-width: 92px;
+    font-family: var(--cond);
+    letter-spacing: 0.08em;
+    font-size: 11px;
+    color: var(--accent);
+    min-width: 76px;
   }
   .outcome {
     font-size: 11px;

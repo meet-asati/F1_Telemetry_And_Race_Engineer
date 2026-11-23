@@ -1,4 +1,5 @@
 import type { AlertLevel } from './types';
+import type { IconName } from './components/Icon.svelte';
 
 export function lapTime(ms: number | null | undefined): string {
   if (ms == null || ms <= 0) return '—';
@@ -41,10 +42,6 @@ export function timeOfDay(ms: number): string {
 
 export const CORNERS = ['FL', 'FR', 'RL', 'RR'] as const;
 
-export function levelIcon(l: AlertLevel): string {
-  return l === 'critical' ? '■' : l === 'watch' ? '▲' : '●';
-}
-
 export function levelLabel(l: AlertLevel): string {
   return l === 'critical' ? 'CRITICAL' : l === 'watch' ? 'WATCH' : 'NOMINAL';
 }
@@ -78,23 +75,9 @@ export function teamColor(id: number): string {
   return TEAM_COLORS[id] ?? '#94a3b8';
 }
 
-export function weatherIcon(w: string): string {
-  switch (w) {
-    case 'clear':
-      return '☀';
-    case 'lightCloud':
-      return '🌤';
-    case 'overcast':
-      return '☁';
-    case 'lightRain':
-      return '🌦';
-    case 'heavyRain':
-      return '🌧';
-    case 'storm':
-      return '⛈';
-    default:
-      return '·';
-  }
+/** Line-icon name for a weather state (see Icon.svelte). */
+export function weatherGlyph(w: string): IconName {
+  return ({ clear: 'sun', lightCloud: 'partcloud', overcast: 'cloud', lightRain: 'rain', heavyRain: 'rain', storm: 'storm' } as Record<string, IconName>)[w] ?? 'cloud';
 }
 
 export function weatherLabel(w: string): string {

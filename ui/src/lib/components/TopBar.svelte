@@ -1,7 +1,8 @@
 <script lang="ts">
   import { pitwall } from '$lib/store.svelte';
   import { LAYOUTS, type LayoutPreset } from '$lib/monitors';
-  import { clock, weatherIcon } from '$lib/format';
+  import { clock, weatherGlyph } from '$lib/format';
+  import Icon from './Icon.svelte';
 
   let showSettings = $state(false);
   let tokenDraft = $state(pitwall.token);
@@ -19,7 +20,7 @@
 </script>
 
 <header class="topbar">
-  <div class="brand"><span class="logo">◢</span> PIT WALL</div>
+  <div class="brand"><span class="logo" aria-hidden="true"></span>PIT WALL <span class="sub">RACE ENGINEERING</span></div>
 
   <div class="session">
     {#if sess && sess.trackName}
@@ -28,7 +29,7 @@
         {#if sess.isRace}Lap <b>{sess.lap}</b> / {sess.totalLaps}{:else}{clock(sess.timeLeftMs)} left{/if}
       </span>
       <span class="dim">{sess.trackName}</span>
-      <span class="num dim">{weatherIcon(sess.weather)} {sess.airTempC}° / {sess.trackTempC}°</span>
+      <span class="num dim wx"><Icon name={weatherGlyph(sess.weather)} /> {sess.airTempC}° / {sess.trackTempC}°</span>
       {#if s?.gameYear}<span class="chip">F1 {s.gameYear}</span>{/if}
       {#if s?.timing.position}<span class="chip pos num">P{s.timing.position}</span>{/if}
     {:else}
@@ -36,7 +37,7 @@
     {/if}
   </div>
 
-  {#if flag}<div class="flag" role="status">⚑ {flag}</div>{/if}
+  {#if flag}<div class="flag" role="status"><Icon name="flag" /> {flag}</div>{/if}
 
   <div class="right">
     <span class="pill {source.cls}" title="Telemetry source">{source.label}</span>
@@ -54,15 +55,15 @@
         </button>
       </div>
       <button class="mute" class:on={comms.muted} onclick={() => pitwall.send({ type: 'comms.mute', muted: !comms.muted })} title="Mute / unmute AI radio">
-        {comms.muted ? '🔇 AI muted' : '🔊 AI'}
+        <Icon name={comms.muted ? 'mute' : 'volume'} />{comms.muted ? 'AI muted' : 'AI'}
       </button>
       {#if comms.friendOverrideActive}
-        <span class="pill override num" title="AI proactive callouts held while you talk">🎙 Override {Math.ceil(comms.overrideRemainingMs / 1000)}s</span>
+        <span class="pill override num" title="AI proactive callouts held while you talk"><Icon name="mic" size={11} /> Override {Math.ceil(comms.overrideRemainingMs / 1000)}s</span>
       {/if}
     {/if}
 
-    <button class="ghost" onclick={() => (showSettings = !showSettings)} aria-label="Settings" title="Settings">⚙</button>
-    <a class="ghost link" href="/driver" target="_blank" title="Open the driver view">Driver view ↗</a>
+    <button class="ghost" onclick={() => (showSettings = !showSettings)} aria-label="Settings" title="Settings"><Icon name="settings" /></button>
+    <a class="ghost link" href="/driver" target="_blank" title="Open the driver view">Driver view <Icon name="popout" size={12} /></a>
   </div>
 </header>
 
@@ -81,22 +82,48 @@
 
 <style>
   .topbar {
+    position: relative;
+    z-index: 2;
     flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 8px 14px;
-    background: var(--bezel);
-    border-bottom: 1px solid var(--hairline);
+    padding: 8px 18px 9px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px),
+      linear-gradient(180deg, #2a2f36 0%, #181b20 45%, #0e1013 100%);
+    border-bottom: 2px solid var(--team);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 6px 18px rgba(0, 0, 0, 0.7);
     flex-wrap: wrap;
+    font-family: var(--cond);
   }
   .brand {
-    font-weight: 800;
-    letter-spacing: 0.14em;
-    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    font-size: 15px;
+  }
+  .brand .sub {
+    font-size: 9px;
+    letter-spacing: 0.3em;
+    color: var(--text-dim);
+    font-weight: 400;
   }
   .logo {
-    color: #e10600;
+    width: 18px;
+    height: 14px;
+    background: var(--team);
+    clip-path: polygon(35% 0, 100% 0, 65% 100%, 0 100%);
+    box-shadow: 0 0 8px var(--team);
+  }
+  .wx {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
   }
   .session {
     display: flex;
@@ -118,6 +145,9 @@
     font-weight: 700;
   }
   .flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     background: #facc15;
     color: #111;
     font-weight: 800;
@@ -139,9 +169,14 @@
     flex-wrap: wrap;
   }
   .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 11px;
+    letter-spacing: 0.08em;
     padding: 3px 8px;
-    border-radius: 999px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.4);
     border: 1px solid var(--hairline-strong);
     white-space: nowrap;
   }
@@ -173,14 +208,14 @@
     font-size: 12px;
   }
   .seg button:first-child {
-    border-radius: 6px 0 0 6px;
+    border-radius: 3px 0 0 3px;
   }
   .seg button:last-child {
-    border-radius: 0 6px 6px 0;
+    border-radius: 0 3px 3px 0;
     border-left: none;
   }
   .seg .on {
-    background: #134e4a;
+    background: #0b3a44;
     border-color: var(--accent);
     color: var(--accent);
   }
@@ -192,9 +227,16 @@
     color: var(--watch);
   }
   .link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     color: var(--text-dim);
     text-decoration: none;
     font-size: 12px;
+    letter-spacing: 0.06em;
+  }
+  .link:hover {
+    color: var(--text);
   }
   .toast {
     position: fixed;

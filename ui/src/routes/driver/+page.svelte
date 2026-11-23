@@ -1,5 +1,6 @@
 <script lang="ts">
   import { pitwall } from '$lib/store.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import { COMPOUND_COLOR, CORNERS, gap, lapTime, signed, wearColor } from '$lib/format';
 
   const s = $derived(pitwall.snap);
@@ -36,13 +37,13 @@
       <div class="cell">
         <div class="k">TYRES</div>
         <div class="v num" style="color:{worst ? wearColor(worst.value) : 'inherit'}">{worst?.value.toFixed(0)}%</div>
-        <div class="sub"><span style="color:{COMPOUND_COLOR[s.tyres.compound]}">●</span> {s.tyres.compound} · {worst?.corner} · {s.tyres.ageLaps}L</div>
+        <div class="sub"><span class="dot" style="color:{COMPOUND_COLOR[s.tyres.compound]}"></span> {s.tyres.compound} · {worst?.corner} · {s.tyres.ageLaps}L</div>
       </div>
     </div>
     <div class="radio">
       <span class="k">RADIO</span>
       <span class="line">{s.comms.lastSpokenLine ?? '—'}</span>
-      <button class="ghost" onclick={() => pitwall.send({ type: 'comms.mute', muted: !s.comms.muted })}>{s.comms.muted ? '🔇 Unmute AI' : '🔊 Mute AI'}</button>
+      <button class="ghost" onclick={() => pitwall.send({ type: 'comms.mute', muted: !s.comms.muted })}><Icon name={s.comms.muted ? 'mute' : 'volume'} size={20} />{s.comms.muted ? 'Unmute AI' : 'Mute AI'}</button>
     </div>
   {:else}
     <div class="wait">{pitwall.connected ? 'Waiting for telemetry…' : 'Connecting…'}</div>

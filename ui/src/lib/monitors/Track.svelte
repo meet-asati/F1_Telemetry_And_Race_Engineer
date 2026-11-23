@@ -1,6 +1,9 @@
 <script lang="ts">
   import { pitwall } from '$lib/store.svelte';
   import TrackCanvas, { type ColorMode } from '$lib/components/TrackCanvas.svelte';
+  import TraceCanvas from '$lib/components/TraceCanvas.svelte';
+  import Icon from '$lib/components/Icon.svelte';
+  import { lapTime, signed } from '$lib/format';
   import RadioComposer from '$lib/components/RadioComposer.svelte';
   import type { TelemetrySnapshot } from '$lib/types';
 
@@ -21,14 +24,41 @@
     });
   });
   const yellowSectors = $derived([...new Set(sectors.filter((s) => s.flag === 'yellow').map((s) => s.sector))]);
+  const me = $derived(snap.track.cars.find((c) => c.isPlayer));
+  const gearLabel = (g: number) => (g < 0 ? 'R' : g === 0 ? 'N' : String(g));
+  const delta = $derived(snap.timing.lastLapMs && snap.timing.bestLapMs ? (snap.timing.lastLapMs - snap.timing.bestLapMs) / 1000 : null);
 </script>
+
+{#snippet legend()}
+  <div class="legend">
+    <span style="color:var(--data)">THR</span><span style="color:var(--crit)">BRK</span><span style="color:var(--accent)">SPD</span>
+  </div>
+{/snippet}
 
 {#if mode === 'tile'}
   <div class="tile">
-    <TrackCanvas />
-    {#if yellowSectors.length}
-      <div class="flags"><span class="chip yellow">⚑ Yellow S{yellowSectors.join(', S')}</span></div>
-    {/if}
+    <div class="map-area">
+      <TrackCanvas />
+      <div class="ro tl num">
+        <div><span class="k">LAP</span> <b>{snap.session.lap}</b><span class="faint">/{snap.session.totalLaps}</span></div>
+        <div><span class="k">LAST</span> {lapTime(snap.timing.lastLapMs)}</div>
+        <div><span class="k">BEST</span> <span class="purple">{lapTime(snap.timing.bestLapMs)}</span></div>
+        {#if delta !== null}<div><span class="k">DELTA</span> <span class:neg={delta <= 0} class:pos={delta > 0}>{signed(delta, 3)}</span></div>{/if}
+      </div>
+      {#if me}
+        <div class="ro tr num">
+          <div class="speed">{me.speedKph}<small> KPH</small></div>
+          <div class="gear">{gearLabel(me.gear)}{#if me.drsActive}<span class="drs">DRS</span>{/if}</div>
+        </div>
+      {/if}
+      {#if yellowSectors.length}
+        <div class="flags"><span class="chip yellow"><Icon name="flag" size={11} /> YELLOW S{yellowSectors.join(', S')}</span></div>
+      {/if}
+    </div>
+    <div class="trace">
+      {@render legend()}
+      <TraceCanvas />
+    </div>
   </div>
 {:else}
   <div class="inspect">
@@ -40,6 +70,10 @@
       <span class="faint">Scroll to zoom · drag to pan · click a car to select</span>
     </div>
     <div class="map"><TrackCanvas interactive {colorMode} labels /></div>
+    <div class="trace big">
+      {@render legend()}
+      <TraceCanvas />
+    </div>
     <div class="cols">
       <div class="panel">
         <div class="label">Selected car</div>
@@ -53,7 +87,7 @@
             <span class="dim">Gear</span><span>{car.gear <= 0 ? (car.gear === 0 ? 'N' : 'R') : car.gear}</span>
             <span class="dim">Throttle</span><span class="bar"><span style="width:{car.throttlePct}%;background:#22c55e"></span></span>
             <span class="dim">Brake</span><span class="bar"><span style="width:{car.brakePct}%;background:#ef4444"></span></span>
-            <span class="dim">ERS mode</span><span>{car.ersDeployMode ?? '🔒'}</span>
+            <span class="dim">ERS mode</span><span>{#if car.ersDeployMode}{car.ersDeployMode}{:else}<Icon name="lock" size={12} /> restricted{/if}</span>
             <span class="dim">Lap distance</span><span>{car.lapDistancePct.toFixed(1)}%</span>
             <span class="dim">DRS</span><span>{car.drsActive ? 'OPEN' : '—'}</span>
           </div>
@@ -68,7 +102,7 @@
         {:else}
           <ul>
             {#each sectors as z}
-              <li><span class="chip {z.flag}">⚑ {z.flag.toUpperCase()}</span> Zone {z.zone} · S{z.sector} · {(z.startFraction * 100).toFixed(0)}–{(z.endFraction * 100).toFixed(0)}% of lap</li>
+              <li><span class="chip {z.flag}"><Icon name="flag" size={11} /> {z.flag.toUpperCase()}</span> Zone {z.zone} · S{z.sector} · {(z.startFraction * 100).toFixed(0)}–{(z.endFraction * 100).toFixed(0)}% of lap</li>
             {/each}
           </ul>
         {/if}
@@ -87,14 +121,106 @@
 
 <style>
   .tile {
-    position: relative;
     height: 100%;
-    min-height: 160px;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .map-area {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+  }
+  .ro {
+    position: absolute;
+    top: 0;
+    font-size: 11px;
+    line-height: 1.45;
+    pointer-events: none;
+    text-shadow: 0 0 4px #000;
+  }
+  .ro .k {
+    display: inline-block;
+    width: 40px;
+    font-family: var(--cond);
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+  }
+  .tl {
+    left: 0;
+    color: var(--data);
+  }
+  .tl b {
+    font-size: 15px;
+  }
+  .tr {
+    right: 0;
+    text-align: right;
+  }
+  .speed {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+  }
+  .speed small {
+    font-size: 9px;
+    color: var(--text-dim);
+  }
+  .gear {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--data);
+    line-height: 1.1;
+  }
+  .drs {
+    font-size: 10px;
+    margin-left: 6px;
+    padding: 1px 4px;
+    color: #001a12;
+    background: var(--data);
+    vertical-align: middle;
+  }
+  .purple {
+    color: var(--purple);
+  }
+  .neg {
+    color: var(--data);
+  }
+  .pos {
+    color: var(--crit);
   }
   .flags {
     position: absolute;
     left: 0;
     bottom: 0;
+  }
+  .trace {
+    position: relative;
+    height: 26%;
+    min-height: 56px;
+    max-height: 120px;
+    border-top: 1px solid var(--hairline);
+    padding-top: 4px;
+  }
+  .trace.big {
+    height: 150px;
+    max-height: none;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    padding: 6px;
+  }
+  .legend {
+    position: absolute;
+    left: 36px;
+    top: 4px;
+    z-index: 1;
+    display: flex;
+    gap: 8px;
+    font-family: var(--cond);
+    font-size: 9px;
+    letter-spacing: 0.14em;
   }
   .chip.yellow {
     color: #facc15;
@@ -122,22 +248,19 @@
   .toolbar .active {
     border-color: var(--accent);
     color: var(--accent);
+    background: rgba(34, 211, 238, 0.12);
   }
   .map {
-    height: 420px;
+    height: min(56vh, 620px);
+    min-height: 320px;
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
-    background: var(--canvas);
+    background: rgba(2, 7, 10, 0.6);
   }
   .cols {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 12px;
-  }
-  .panel {
-    padding: 10px;
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
   }
   .car-head {
     display: flex;

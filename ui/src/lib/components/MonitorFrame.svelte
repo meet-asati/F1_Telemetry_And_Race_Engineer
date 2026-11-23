@@ -1,13 +1,14 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import AlertBadge from './AlertBadge.svelte';
+  import Icon from './Icon.svelte';
   import { pitwall } from '$lib/store.svelte';
   import type { AlertLevel, MonitorId } from '$lib/types';
 
   let {
     id,
     title,
-    icon,
+    channel,
     level = 'nominal',
     reason = null,
     standalone = false,
@@ -15,7 +16,7 @@
   }: {
     id: MonitorId;
     title: string;
-    icon: string;
+    channel: string;
     level?: AlertLevel;
     reason?: string | null;
     standalone?: boolean;
@@ -28,7 +29,7 @@
 
   function popOut(e: MouseEvent) {
     e.stopPropagation();
-    window.open(`/monitor/${id}`, `pitwall-${id}`, 'width=1000,height=760');
+    window.open(`/monitor/${id}`, `pitwall-${id}`, 'width=1100,height=800');
   }
 
   function onKey(e: KeyboardEvent) {
@@ -39,117 +40,81 @@
   }
 </script>
 
-<!-- Tiles are buttons (open inspector); the standalone pop-out is a plain region. -->
+<!-- Tiles are buttons (open the inspector); the standalone pop-out is a plain region. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <section
-  class="monitor {level}"
+  class="mon {level}"
   class:stale={pitwall.stale}
   class:standalone
   role={standalone ? undefined : 'button'}
   tabindex={standalone ? undefined : 0}
   onclick={open}
   onkeydown={standalone ? undefined : onKey}
-  aria-label="{title} monitor{standalone ? '' : ', open inspector'}"
+  aria-label="{title} monitor{standalone ? '' : ', open full view'}"
 >
-  <header>
-    <span class="icon" aria-hidden="true">{icon}</span>
-    <h2>{title}</h2>
-    <AlertBadge {level} {reason} compact />
-    {#if !standalone}
-      <button class="ghost pop" title="Pop out to a new window" aria-label="Pop out {title}" onclick={popOut}>⧉</button>
+  <div class="mon-screen">
+    <header class="mon-head">
+      <span class="ch">{channel}</span>
+      <h2>{title}</h2>
+      <AlertBadge {level} {reason} compact />
+      {#if !standalone}
+        <button class="icon-btn" title="Pop out to a new window" aria-label="Pop out {title}" onclick={popOut}><Icon name="popout" /></button>
+      {/if}
+    </header>
+    <div class="mon-body">
+      {@render children()}
+    </div>
+    {#if pitwall.stale}
+      <div class="stale-tag">{pitwall.waitingForGame ? 'WAITING FOR GAME' : 'NO SIGNAL'}</div>
     {/if}
-  </header>
-  <div class="body">
-    {@render children()}
   </div>
-  {#if pitwall.stale}
-    <div class="stale-tag">{pitwall.waitingForGame ? 'WAITING FOR GAME' : 'STALE'}</div>
-  {/if}
+  <div class="mon-chin">PW · {channel}</div>
+  <span class="mon-led"></span>
 </section>
 
 <style>
-  .monitor {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    min-width: 0;
-    background: var(--bezel);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    overflow: hidden;
+  section {
     cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: transform 0.15s, filter 0.15s;
   }
-  .monitor.standalone {
+  section.standalone {
     cursor: default;
   }
-  .monitor:not(.standalone):hover {
-    border-color: var(--hairline-strong);
+  section:not(.standalone):hover {
+    filter: brightness(1.12);
   }
-  .monitor.watch {
-    border-color: var(--watch);
-    box-shadow: inset 0 0 0 1px var(--watch);
+  section:not(.standalone):hover :global(.mon-head h2) {
+    color: #7ff0ff;
   }
-  .monitor.critical {
-    border-color: var(--crit);
-    box-shadow: inset 0 0 0 1px var(--crit), 0 0 18px rgba(239, 68, 68, 0.25);
-    animation: pulse 1.6s ease-in-out infinite;
+  /* Mounting arm up to the gantry rail. */
+  section:not(.standalone)::before {
+    content: '';
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    width: 46px;
+    height: 12px;
+    transform: translateX(-50%);
+    background: linear-gradient(90deg, #0b0d10, #2a2f36 45%, #15181c);
+    border-radius: 2px 2px 0 0;
+    box-shadow: 0 0 0 1px #000;
   }
-  @keyframes pulse {
-    50% {
-      box-shadow: inset 0 0 0 1px var(--crit), 0 0 4px rgba(239, 68, 68, 0.1);
-    }
-  }
-  header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 10px;
-    border-bottom: 1px solid var(--hairline);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
-    min-width: 0;
-  }
-  h2 {
-    margin: 0;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .icon {
-    font-size: 14px;
-  }
-  .pop {
-    padding: 0 6px;
-    font-size: 14px;
-    border: none;
-    color: var(--text-dim);
-  }
-  .body {
-    flex: 1;
-    min-height: 0;
-    padding: 10px;
-    overflow: auto;
-  }
-  .stale .body {
-    opacity: 0.4;
-    filter: grayscale(0.8);
+  .stale .mon-body {
+    opacity: 0.35;
+    filter: grayscale(0.9);
   }
   .stale-tag {
     position: absolute;
-    right: 10px;
-    bottom: 8px;
-    font-size: 10px;
-    letter-spacing: 0.1em;
+    inset: 50% auto auto 50%;
+    transform: translate(-50%, -50%);
+    z-index: 4;
+    font-family: var(--cond);
+    font-size: 11px;
+    letter-spacing: 0.3em;
     color: var(--text-dim);
     border: 1px solid var(--hairline-strong);
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--canvas);
+    padding: 3px 10px;
+    background: rgba(2, 7, 10, 0.85);
+    white-space: nowrap;
   }
 </style>

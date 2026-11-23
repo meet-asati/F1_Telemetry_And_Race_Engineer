@@ -4,6 +4,7 @@
   import type { TelemetrySnapshot } from '$lib/types';
   import LineChart from '$lib/components/LineChart.svelte';
   import RadioComposer from '$lib/components/RadioComposer.svelte';
+  import Icon from '$lib/components/Icon.svelte';
 
   let { snap, mode }: { snap: TelemetrySnapshot; mode: 'tile' | 'inspect' } = $props();
 
@@ -40,35 +41,33 @@
     return out;
   });
 
-  function tileRows() {
-    // All rows when few cars; otherwise top 3 + a window around the player.
-    if (entries.length <= 12 || !player) return entries;
-    const i = entries.indexOf(player);
-    const win = entries.slice(Math.max(3, i - 3), i + 4);
-    return [...entries.slice(0, 3), ...win];
-  }
 </script>
 
 {#if mode === 'tile'}
   <table class="tower num">
+    <thead>
+      <tr><th>P</th><th>DRIVER</th><th class="r">INT</th><th class="r">LAST</th><th>TYRE</th><th></th></tr>
+    </thead>
     <tbody>
-      {#each tileRows() as e, k (e.carIndex)}
-        {#if k === 3 && entries.length > 12 && tileRows()[3]?.position !== 4}
-          <tr class="sep"><td colspan="6">⋯</td></tr>
-        {/if}
+      {#each entries as e (e.carIndex)}
         <tr class:player={e.isPlayer} class:selected={pitwall.selectedCar === e.carIndex} class:pit={e.pitStatus !== 'none'}>
           <td class="pos">{e.position}</td>
-          <td><i class="team" style="background:{teamColor(e.teamId)}"></i>{e.driverLabel}</td>
+          <td><i class="team" style="background:{teamColor(e.teamId)};color:{teamColor(e.teamId)}"></i>{e.driverLabel}</td>
           <td class="gap">{e.position === 1 ? 'LEADER' : gap(e.gapToAheadMs)}</td>
+          <td class="last" class:purple={e.bestLapMs != null && e.lastLapMs === e.bestLapMs && e.bestLapMs === fastest}>{lapTime(e.lastLapMs)}</td>
           <td>
-            {#if e.telemetryRestricted}<span title="Restricted telemetry">🔒</span>
-            {:else if e.compound}<span class="compound" style="color:{COMPOUND_COLOR[e.compound] ?? '#888'}">{e.compound}</span>{/if}
+            <span class="tyre">
+              {#if e.telemetryRestricted}<span class="faint" title="Restricted telemetry"><Icon name="lock" size={12} /></span>
+              {:else if e.compound}<span class="compound" style="color:{COMPOUND_COLOR[e.compound] ?? '#888'}">{e.compound}</span>
+                <span class="dim">{e.tyreAgeLaps ?? ''}</span>{/if}
+            </span>
           </td>
-          <td class="dim">{e.tyreAgeLaps ?? ''}</td>
-          <td class="tags">
-            {#if e.pitStatus !== 'none'}<span class="chip pit-tag">PIT</span>{/if}
-            {#if e.penaltiesMs > 0}<span class="chip pen">+{e.penaltiesMs / 1000}s</span>{/if}
-            {#if e.pitStops > 0}<span class="faint">{e.pitStops}▸</span>{/if}
+          <td>
+            <span class="tags">
+              {#if e.pitStatus !== 'none'}<span class="chip pit-tag">PIT</span>{/if}
+              {#if e.penaltiesMs > 0}<span class="chip pen">+{e.penaltiesMs / 1000}s</span>{/if}
+              {#if e.pitStops > 0}<span class="faint" title="Pit stops">{e.pitStops}S</span>{/if}
+            </span>
           </td>
         </tr>
       {/each}
@@ -92,7 +91,7 @@
               onclick={() => pitwall.select(e.carIndex)}
             >
               <td class="pos">{e.position}</td>
-              <td class="name"><i class="team" style="background:{teamColor(e.teamId)}"></i>{e.driverLabel} <span class="faint">#{e.raceNumber}</span></td>
+              <td class="name"><i class="team" style="background:{teamColor(e.teamId)};color:{teamColor(e.teamId)}"></i>{e.driverLabel} <span class="faint">#{e.raceNumber}</span></td>
               <td>{e.lap}</td>
               <td>{e.position === 1 ? '—' : gap(e.gapToAheadMs)}</td>
               <td>{e.position === 1 ? 'LEADER' : gap(e.gapToLeaderMs)}</td>
@@ -102,14 +101,14 @@
                 <td class:purple={s != null && s === bestSectors[i]}>{sector(s)}</td>
               {/each}
               <td>
-                {#if e.telemetryRestricted}<span class="chip" title="Rival telemetry restricted">🔒 Restricted</span>
+                {#if e.telemetryRestricted}<span class="chip" title="Rival telemetry restricted"><Icon name="lock" size={11} /> Restricted</span>
                 {:else if e.compound}<span class="compound" style="color:{COMPOUND_COLOR[e.compound]}">{e.compound}</span> <span class="dim">{e.tyreAgeLaps}L</span>{/if}
               </td>
               <td class="stints">
                 {#each e.stints as st}<span class="stint" style="border-color:{COMPOUND_COLOR[st.compound] ?? '#555'}">{st.compound} {st.startLap}–{st.endLap ?? ''}</span>{/each}
               </td>
               <td>{e.pitStatus !== 'none' ? 'IN PIT' : e.pitStops}</td>
-              <td>{e.penaltiesMs ? `+${e.penaltiesMs / 1000}s` : ''}{e.warnings ? ` ⚠${e.warnings}` : ''}</td>
+              <td>{e.penaltiesMs ? `+${e.penaltiesMs / 1000}s` : ''}{e.warnings ? ` ${e.warnings}W` : ''}</td>
             </tr>
           {/each}
         </tbody>
@@ -155,14 +154,42 @@
   }
   .tower td {
     padding: 2px 4px;
-    font-size: 12.5px;
+    font-size: 12px;
     white-space: nowrap;
+    border-bottom: 1px solid rgba(110, 255, 200, 0.05);
   }
-  .tower .sep td {
-    text-align: center;
-    color: var(--text-faint);
-    padding: 0;
-    line-height: 0.8;
+  .tower .pos {
+    color: var(--text);
+    font-weight: 700;
+  }
+  .tower .gap {
+    color: var(--data);
+  }
+  .tower th {
+    position: sticky;
+    top: -8px;
+    z-index: 1;
+    background: #04121a;
+    font-family: var(--cond);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    color: var(--text-dim);
+    text-align: left;
+    padding: 2px 4px 4px;
+    border-bottom: 1px solid var(--hairline-strong);
+  }
+  .tower th.r,
+  .tower .last {
+    text-align: right;
+  }
+  .tower .last {
+    color: var(--text-dim);
+  }
+  .tower .tyre {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
   .pos {
     width: 22px;
@@ -174,14 +201,18 @@
   }
   .team {
     display: inline-block;
-    width: 3px;
-    height: 12px;
+    width: 4px;
+    height: 13px;
     margin-right: 6px;
     vertical-align: -2px;
-    border-radius: 1px;
+    border-radius: 0;
+    box-shadow: 0 0 5px currentColor;
   }
   tr.player {
-    background: rgba(253, 224, 71, 0.1);
+    background: linear-gradient(90deg, rgba(255, 225, 77, 0.2), rgba(255, 225, 77, 0.04));
+    color: var(--player);
+  }
+  tr.player .gap {
     color: var(--player);
   }
   tr.selected {
@@ -194,6 +225,11 @@
     display: flex;
     gap: 4px;
     justify-content: flex-end;
+    align-items: center;
+  }
+  .tags .chip {
+    padding: 0 4px;
+    font-size: 10px;
   }
   .pit-tag {
     color: var(--cold);
@@ -239,8 +275,11 @@
   .full tbody tr:hover {
     background: rgba(255, 255, 255, 0.04);
   }
+  .full td:nth-child(n + 4):nth-child(-n + 10) {
+    color: var(--data);
+  }
   .purple {
-    color: #c084fc;
+    color: var(--purple) !important;
     font-weight: 600;
   }
   .stint {

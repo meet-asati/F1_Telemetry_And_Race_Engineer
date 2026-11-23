@@ -31,6 +31,75 @@ export type LayoutPreset = 'full' | 'stint' | 'quali' | 'sc';
 
 const HISTORY_SAMPLES = 900; // 15 min @ 1 Hz
 const LOG_MAX = 300;
+const TRACE_SAMPLES = 450; // 30 s @ 15 Hz
+const OUTLINE_BINS = 720;
+
+/** Player input sample for the live trace (non-reactive; drawn by canvas loops). */
+export interface TraceSample {
+  t: number;
+  throttle: number;
+  brake: number;
+  speed: number;
+  gear: number;
+}
+
+/**
+ * Track outline built in the browser from every running car's position,
+ * binned by lap distance. With a field of cars it fills in within seconds,
+ * long before the server has a complete outline to store.
+ */
+class LiveOutline {
+  private sx = new Float64Array(OUTLINE_BINS);
+  private sz = new Float64Array(OUTLINE_BINS);
+  private n = new Uint16Array(OUTLINE_BINS);
+  filled = 0;
+
+  reset() {
+    this.sx.fill(0);
+    this.sz.fill(0);
+    this.n.fill(0);
+    this.filled = 0;
+  }
+
+  add(pct: number, x: number, z: number) {
+    // The server clamps to 0–100, so exact 0 also covers cars behind the line on the grid.
+    if (!(pct > 0 && pct < 100) || (x === 0 && z === 0)) return;
+    const i = Math.min(OUTLINE_BINS - 1, Math.floor((pct / 100) * OUTLINE_BINS));
+    if (this.n[i] === 0) this.filled++;
+    if (this.n[i] < 12) {
+      this.sx[i] += x;
+      this.sz[i] += z;
+      this.n[i]++;
+    }
+  }
+
+  /** Runs of consecutive filled bins (gaps of up to 3 bins are bridged). */
+  segments(): [number, number][][] {
+    const out: [number, number][][] = [];
+    let cur: [number, number][] = [];
+    let gap = 0;
+    for (let i = 0; i < OUTLINE_BINS; i++) {
+      if (this.n[i] === 0) {
+        gap++;
+        if (gap > 3 && cur.length) {
+          out.push(cur);
+          cur = [];
+        }
+        continue;
+      }
+      gap = 0;
+      cur.push([this.sx[i] / this.n[i], this.sz[i] / this.n[i]]);
+    }
+    if (cur.length) out.push(cur);
+    // Join the wrap-around at the start/finish line.
+    if (out.length > 1 && this.n[0] && this.n[OUTLINE_BINS - 1]) out[0] = [...out.pop()!, ...out[0]];
+    return out;
+  }
+
+  get complete() {
+    return this.filled >= OUTLINE_BINS * 0.97;
+  }
+}
 
 function loadPref(key: string, fallback: string): string {
   try {
@@ -69,6 +138,10 @@ class PitWallStore {
   laps = $state.raw<LapRow[]>([]);
   outline = $state.raw<[number, number][] | null>(null);
   outlineTrackId: number | null = null;
+  /** Browser-built outline used until the server has one (read by canvas loops). */
+  liveOutline = new LiveOutline();
+  /** Rolling player input trace (read by canvas loops). */
+  trace: TraceSample[] = [];
 
   private ws: WebSocket | null = null;
   private retry = 0;
@@ -206,7 +279,23 @@ class PitWallStore {
       this.tyreHist = [];
       this.gapHist = new Map();
       this.laps = [];
+      this.trace = [];
       this.fetchLaps();
+    }
+    if (prev?.session.trackId !== s.session.trackId || prev?.sessionUid !== s.sessionUid) {
+      this.liveOutline.reset();
+    }
+    if (prev && prev.session.trackId !== s.session.trackId) {
+      this.outline = null;
+      this.outlineTrackId = null;
+    }
+    if (!this.outline) {
+      for (const c of s.track.cars) if (!c.inPit) this.liveOutline.add(c.lapDistancePct, c.x, c.z);
+    }
+    const me = s.track.cars.find((c) => c.isPlayer);
+    if (me && s.lastPacketAgeMs != null && s.lastPacketAgeMs < 2000) {
+      if (this.trace.length >= TRACE_SAMPLES) this.trace.shift();
+      this.trace.push({ t: performance.now(), throttle: me.throttlePct, brake: me.brakePct, speed: me.speedKph, gear: me.gear });
     }
     if (s.track.outlineAvailable && s.session.trackId !== this.outlineTrackId) {
       this.outlineTrackId = s.session.trackId;

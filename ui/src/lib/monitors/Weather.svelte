@@ -1,6 +1,7 @@
 <script lang="ts">
   import { pitwall } from '$lib/store.svelte';
-  import { clock, timeOfDay, weatherIcon, weatherLabel } from '$lib/format';
+  import { clock, timeOfDay, weatherGlyph, weatherLabel } from '$lib/format';
+  import Icon from '$lib/components/Icon.svelte';
   import type { TelemetrySnapshot } from '$lib/types';
   import RadioComposer from '$lib/components/RadioComposer.svelte';
 
@@ -18,7 +19,7 @@
 {#if mode === 'tile'}
   <div class="tile">
     <div class="now">
-      <span class="icon" aria-hidden="true">{weatherIcon(s.weather)}</span>
+      <span class="icon"><Icon name={weatherGlyph(s.weather)} size={34} /></span>
       <div>
         <div class="cond">{weatherLabel(s.weather)}</div>
         <div class="dim num">Air {s.airTempC}° · Track {s.trackTempC}°</div>
@@ -27,7 +28,7 @@
     <div class="forecast num">
       {#each next.slice(0, 5) as f}
         <div class="fc" title="{f.timeOffsetMin} min: {weatherLabel(f.weather)}, rain {f.rainPct}%">
-          <span>{weatherIcon(f.weather)}</span>
+          <Icon name={weatherGlyph(f.weather)} size={16} />
           <span class="rain" style="--r:{f.rainPct}%">{f.rainPct}%</span>
           <span class="faint">+{f.timeOffsetMin}′</span>
         </div>
@@ -52,7 +53,7 @@
         <div class="slot">
           <div class="barwrap"><div class="fill" style="height:{f.rainPct}%"></div></div>
           <div class="pct">{f.rainPct}%</div>
-          <div>{weatherIcon(f.weather)}</div>
+          <div><Icon name={weatherGlyph(f.weather)} size={18} /></div>
           <div class="faint">{f.timeOffsetMin === 0 ? 'now' : `+${f.timeOffsetMin}′`}</div>
           <div class="faint small">{f.trackTempC}° / {f.airTempC}°</div>
         </div>
@@ -86,7 +87,8 @@
     align-items: center;
   }
   .icon {
-    font-size: 30px;
+    color: var(--accent);
+    filter: drop-shadow(0 0 4px rgba(34, 211, 238, 0.5));
   }
   .cond {
     font-weight: 600;
