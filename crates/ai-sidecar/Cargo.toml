@@ -1,0 +1,17 @@
+[package]
+name = "ai-sidecar"
+description = "HTTP clients for local AI sidecars (TTS now; STT and LLM in M5)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hound = "3.5"
+
+[dev-dependencies]
+tokio.workspace = true

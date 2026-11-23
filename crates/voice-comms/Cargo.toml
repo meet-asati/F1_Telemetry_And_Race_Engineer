@@ -1,0 +1,13 @@
+[package]
+name = "voice-comms"
+description = "Radio DSP, resampling, TTS disk cache and local audio playback"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+ai-sidecar.workspace = true
+cpal = "0.15"
+hound = "3.5"
