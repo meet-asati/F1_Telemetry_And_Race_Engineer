@@ -1,0 +1,9 @@
+[package]
+name = "comms"
+description = "Rule-based race-engineer callouts and the comms arbitrator (priorities, gating, cooldowns, copilot)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+race-state.workspace = true

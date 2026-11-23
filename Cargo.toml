@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/f1-udp",
     "crates/race-state",
-    # "crates/comms",
+    "crates/comms",
     # "crates/voice-comms",
     # "crates/ai-sidecar",
     # "crates/pitwall-server",
