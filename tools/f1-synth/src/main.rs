@@ -45,7 +45,7 @@ struct Args {
     #[arg(long)]
     no_send: bool,
     /// Restart with a new session when the race ends.
-    #[arg(long, name = "loop")]
+    #[arg(long = "loop")]
     repeat: bool,
 }
 
