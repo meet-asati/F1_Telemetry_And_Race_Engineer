@@ -22,7 +22,10 @@ You are the best in the business: calm, precise, confident and warm, British Eng
 Rules: answer in one or two short radio sentences, under 30 words. Lead with the answer, then at most one clear instruction. \
 Use only facts and numbers from RACE DATA; if the data does not contain the answer, say you don't have that information. \
 Round gaps to one decimal and temperatures to whole degrees. Refer to other drivers by surname or 'they', never 'he' or 'she'. \
-No lists, no markdown, no emojis, no sign-offs, never mention data, telemetry or being an AI.";
+You are the engineer, never the driver: speak to the driver as 'you'. \
+Give a concrete racing instruction (lines, braking, tyre or fuel management, ERS, strategy), never generic advice like 'adjust your set-up'. \
+Our position is the 'Our car' line; the pit window rejoin position is only a projection. \
+No labels or headings, no lists, no markdown, no emojis, no sign-offs, never mention data, telemetry or being an AI.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Intent {
@@ -372,27 +375,27 @@ pub fn race_brief(snap: &TelemetrySnapshot) -> String {
     line("Session", format!("{} at {}, lap {} of {}, phase {}", s.session_type, s.track_name, s.lap, s.total_laps, s.phase));
     line("Flags", format!("safety car {}, yellow zones {}", s.safety_car_status, s.marshal_zones.iter().filter(|z| z.flag == "yellow").count()));
     if let Some((pi, me)) = player(snap) {
-        line("Driver", format!("P{}, pit stops {}, penalties {}s, warnings {}", snap.timing.position, me.pit_stops, me.penalties_ms / 1000, me.warnings));
+        line("Our car", format!("running P{} of {}, pit stops {}, penalties {}s, warnings {}", snap.timing.position, snap.timing.entries.len(), me.pit_stops, me.penalties_ms / 1000, me.warnings));
         line(
             "Laps",
             format!("last {}, best {}", me.last_lap_ms.map(lap_str).unwrap_or("-".into()), me.best_lap_ms.map(lap_str).unwrap_or("-".into())),
         );
-        let fmt_car = |e: &TimingEntry, gap: Option<u32>| {
+        let fmt_car = |e: &TimingEntry, gap: Option<u32>, rel: &str| {
             format!(
-                "{} P{}, gap {}s, last lap {}, tyre {} {} laps",
+                "{} P{}, {}s {rel}, last lap {}, tyre {} {} laps",
                 spoken_name(e),
                 e.position,
-                gap.map(secs).unwrap_or("-".into()),
+                gap.map(secs).unwrap_or("?".into()),
                 e.last_lap_ms.map(lap_str).unwrap_or("-".into()),
                 e.compound.clone().unwrap_or("?".into()),
                 e.tyre_age_laps.map(|a| a.to_string()).unwrap_or("?".into())
             )
         };
         if let Some(a) = pi.checked_sub(1).and_then(|i| snap.timing.entries.get(i)) {
-            line("Car ahead", fmt_car(a, snap.timing.gap_ahead_ms));
+            line("Car ahead (in front of us)", fmt_car(a, snap.timing.gap_ahead_ms, "ahead of us"));
         }
         if let Some(bh) = snap.timing.entries.get(pi + 1) {
-            line("Car behind", fmt_car(bh, snap.timing.gap_behind_ms));
+            line("Car behind (chasing us)", fmt_car(bh, snap.timing.gap_behind_ms, "behind us"));
         }
         if let Some(l) = snap.timing.entries.first().filter(|_| snap.timing.position > 1) {
             line("Leader", format!("{}, {}s ahead of us", spoken_name(l), me.gap_to_leader_ms.map(secs).unwrap_or("-".into())));
@@ -414,7 +417,7 @@ pub fn race_brief(snap: &TelemetrySnapshot) -> String {
         ),
     );
     if let Some(w) = &s.pit_window {
-        line("Game pit window", format!("lap {} to {}, rejoin P{}", w.ideal_lap, w.latest_lap, w.rejoin_position));
+        line("Game pit window", format!("lap {} to {}; if we pit now we rejoin around P{}", w.ideal_lap, w.latest_lap, w.rejoin_position));
     }
     line(
         "Fuel and ERS",
@@ -452,7 +455,18 @@ pub fn polish_reply(raw: &str) -> Option<String> {
             t = rest.to_string();
         }
     }
+    // Drop a short heading-style label ("Safety car plan: ...").
+    if let Some((head, rest)) = t.split_once(':') {
+        let words = head.split_whitespace().count();
+        if (1..=4).contains(&words) && !head.chars().any(|c| c.is_ascii_digit()) && !rest.trim().is_empty() {
+            t = rest.to_string();
+        }
+    }
     let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Small models sometimes echo template text; never put that on the radio.
+    if t.contains('<') || t.contains('>') || t.contains('{') {
+        return None;
+    }
     // Sentence ends are ". ", "! ", "? " or end of text (not the "." in "1.6").
     let chars: Vec<char> = t.chars().collect();
     let mut out = String::new();
@@ -574,8 +588,11 @@ mod tests {
     #[test]
     fn brief_and_polish() {
         let b = race_brief(&snap());
-        assert!(b.contains("Car ahead: Piastri P4") && b.contains("Car behind: Hamilton P6") && b.contains("projected stop lap 24"), "{b}");
+        assert!(b.contains("Car ahead (in front of us): Piastri P4, 1.6s ahead of us") && b.contains("Car behind (chasing us): Hamilton P6, 0.8s behind us") && b.contains("projected stop lap 24"), "{b}");
         assert_eq!(polish_reply("**Engineer:** Gap is 1.6.  Keep pushing! Extra sentence here."), Some("Gap is 1.6. Keep pushing!".into()));
         assert_eq!(polish_reply("   "), None);
+        assert_eq!(polish_reply("Rain is <chance> percent."), None);
+        assert_eq!(polish_reply("Safety car plan: Box for hards. Keep the gap."), Some("Box for hards. Keep the gap.".into()));
+        assert_eq!(polish_reply("Last lap 1:07.4, keep it up."), Some("Last lap 1:07.4, keep it up.".into()));
     }
 }

@@ -79,15 +79,17 @@ The default voice is `bm_george`, a calm, low British male. Try `bm_fable` or `b
 
 ### 2. Hearing you: whisper.cpp
 
-1. Download `whisper-bin-x64.zip` from the whisper.cpp GitHub releases.
-2. Download the `ggml-base.en.bin` model (or `ggml-small.en.bin` for better accuracy at more CPU).
-3. Run:
+whisper.cpp (CPU build) and the `ggml-base.en` model live in `sidecars/whisper/` (git-ignored). To install them on another machine:
+1. Extract `whisper-bin-x64.zip` from the whisper.cpp GitHub releases into `sidecars/whisper/bin`.
+2. Put `ggml-base.en.bin` from huggingface.co/ggerganov/whisper.cpp in `sidecars/whisper/models`.
 
-```sh
-whisper-server.exe -m ggml-base.en.bin --port 8178
+Start it before a session:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-whisper.ps1
 ```
 
-Any OpenAI-compatible transcription server also works (`[stt] engine = "openai"`).
+It transcribes a short radio clip in about a second on the CPU. For better accuracy, download `ggml-small.en.bin` and pass `-Model ggml-small.en.bin`. Any OpenAI-compatible transcription server also works (`[stt] engine = "openai"`).
 
 ### 3. Thinking: Ollama (only for open-ended questions)
 
@@ -95,7 +97,7 @@ Any OpenAI-compatible transcription server also works (`[stt] engine = "openai"`
 ollama pull qwen2.5:3b
 ```
 
-Set a different model under `[llm] model` (e.g. `llama3.1:8b` if you have the VRAM to spare next to the game). Common questions never reach the LLM:
+`qwen2.5:3b` answers in under a second once loaded, but it is fairly generic. For sharper answers set `[llm] model = "llama3.1:8b"`, if your VRAM can spare about 5 GB next to the game. Common questions never reach the LLM:
 - gap ahead or behind, the leader
 - tyres, including "will they make the end?", and temperatures
 - fuel, battery, brakes, damage, weather, pace

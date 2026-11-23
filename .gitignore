@@ -21,3 +21,6 @@ config.toml
 Thumbs.db
 .vscode/
 .idea/
+
+# Locally installed AI sidecars (whisper.cpp binaries, models)
+sidecars/
