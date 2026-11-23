@@ -1,0 +1,23 @@
+# Rust
+target/
+
+# Node / SvelteKit
+node_modules/
+ui/build/
+ui/.svelte-kit/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+captures/*.bin
+tts-cache/
+
+# Local config (config.example.toml stays tracked)
+config.toml
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
