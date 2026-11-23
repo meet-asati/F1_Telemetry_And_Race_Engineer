@@ -5,13 +5,10 @@
 //! f1-synth --format 2022 --record captures/synth.bin --speed 0
 //! ```
 
-mod sim;
-mod track;
-
 use anyhow::Context;
 use clap::Parser;
 use f1_udp::{capture::Recorder, encode, Format};
-use sim::{Sim, SimConfig};
+use f1_synth::{Sim, SimConfig};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 

@@ -1,0 +1,17 @@
+[package]
+name = "race-state"
+description = "Live race state, derived strategy metrics, wire snapshot types and SQLite persistence"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+f1-udp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+
+[dev-dependencies]
+tokio.workspace = true
+f1-synth = { path = "../../tools/f1-synth" }
