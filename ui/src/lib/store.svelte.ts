@@ -264,6 +264,17 @@ class PitWallStore {
     return true;
   }
 
+  /** Push-to-talk through the pit-wall PC's microphone (hold = true). */
+  ptt(active: boolean) {
+    return this.send({ type: 'ptt.set', active });
+  }
+
+  /** Ask the engineer a question as if the driver said it on the radio. */
+  ask(text: string) {
+    const t = text.trim();
+    return t ? this.send({ type: 'driver.ask', text: t }) : false;
+  }
+
   radio(text: string, attachments: string[] = []) {
     const t = text.trim();
     if (!t) return false;

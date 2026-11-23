@@ -4,6 +4,7 @@
   import type { RadioEvent, Suggestion, TelemetrySnapshot } from '$lib/types';
   import RadioComposer from '$lib/components/RadioComposer.svelte';
   import Icon from '$lib/components/Icon.svelte';
+  import PushToTalk from '$lib/components/PushToTalk.svelte';
 
   let { snap, mode }: { snap: TelemetrySnapshot; mode: 'tile' | 'inspect' } = $props();
 
@@ -11,6 +12,11 @@
   let editing = $state<string | null>(null);
   let editText = $state('');
   let filter = $state<'all' | 'friend' | 'rule' | 'llm' | 'driver'>('all');
+  let question = $state('');
+  const QUICK_QUESTIONS = ['Radio check', 'Gap behind?', 'How are the tyres?', 'Should I box this lap?', 'Fuel?', 'Can we make it to the end on these tyres?'];
+  function ask(q: string) {
+    if (pitwall.ask(q)) question = '';
+  }
 
   const log = $derived(pitwall.radioLog.filter((r) => filter === 'all' || r.source === filter));
 
@@ -46,13 +52,21 @@
     <div class="pending" class:has={c.pendingSuggestions.length > 0}>
       <span class="n num">{c.pendingSuggestions.length}</span> pending suggestion{c.pendingSuggestions.length === 1 ? '' : 's'}
     </div>
+    {#if c.lastDriverLine}
+      <div class="last">
+        <div class="label">Driver {#if c.pttActive}<span class="speaking">· TRANSMITTING</span>{/if}</div>
+        <div class="line driver">“{c.lastDriverLine}”</div>
+      </div>
+    {/if}
     <div class="last">
-      <div class="label">Last on radio {#if c.speaking}<span class="speaking">· ON AIR</span>{/if}</div>
+      <div class="label">Engineer {#if c.speaking}<span class="speaking">· ON AIR</span>{:else if c.thinking}<span class="thinking">· THINKING</span>{/if}</div>
       <div class="line">{c.lastSpokenLine ?? '—'}</div>
     </div>
     <div class="row dim small">
-      <span>PTT <b class:on={c.pttActive}>{c.pttActive ? 'LIVE' : 'IDLE'}</b></span>
-      <span>TTS <b class:on={c.ttsAvailable}>{c.ttsAvailable ? 'READY' : 'TEXT ONLY'}</b></span>
+      <span>PTT <b class:on={c.pttActive}>{c.pttActive ? 'LIVE' : c.micAvailable ? 'READY' : 'NO MIC'}</b></span>
+      <span>STT <b class:on={c.sttAvailable}>{c.sttAvailable ? 'OK' : 'OFF'}</b></span>
+      <span>LLM <b class:on={c.llmAvailable}>{c.llmAvailable ? 'OK' : 'OFF'}</b></span>
+      <span>VOICE <b class:on={c.ttsAvailable}>{c.ttsAvailable ? 'OK' : 'TEXT'}</b></span>
     </div>
   </div>
 {:else}
@@ -97,6 +111,31 @@
           </div>
         </div>
       {/each}
+    </section>
+
+    <section>
+      <div class="label">Driver voice (push-to-talk)</div>
+      <div class="status">
+        <span class="chip" class:ok={c.micAvailable}>MIC {c.micAvailable ? 'OPEN' : 'NONE'}</span>
+        <span class="chip" class:ok={c.sttAvailable}>SPEECH-TO-TEXT {c.sttAvailable ? 'READY' : 'OFFLINE'}</span>
+        <span class="chip" class:ok={c.llmAvailable}>LLM {c.llmAvailable ? 'READY' : 'OFFLINE'}</span>
+        <span class="chip" class:ok={c.ttsAvailable}>VOICE {c.ttsAvailable ? 'KOKORO READY' : 'TEXT ONLY'}</span>
+        {#if c.thinking}<span class="chip thinking">ENGINEER THINKING…</span>{/if}
+      </div>
+      <div class="voice-row">
+        <PushToTalk />
+        <form class="ask" onsubmit={(e) => (e.preventDefault(), ask(question))}>
+          <input bind:value={question} placeholder="Ask as the driver, e.g. “what's the gap behind?”" aria-label="Driver question" />
+          <button class="primary" disabled={!question.trim()}>Ask engineer</button>
+        </form>
+      </div>
+      <div class="quick">
+        {#each QUICK_QUESTIONS as q}<button onclick={() => ask(q)}>{q}</button>{/each}
+      </div>
+      <p class="faint hint">
+        In the game, map a wheel button to <b>UDP Action 1</b> (Controls) and hold it to talk. Gaps, tyres, fuel, pace and box calls are answered from telemetry
+        instantly; anything else goes to the local LLM.
+      </p>
     </section>
 
     <section>
@@ -192,6 +231,48 @@
   }
   .small b.on {
     color: var(--data);
+  }
+  .line.driver {
+    color: var(--accent);
+  }
+  .thinking {
+    color: var(--watch);
+  }
+  .status,
+  .quick {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .status .ok {
+    color: var(--data);
+    border-color: rgba(77, 250, 154, 0.5);
+  }
+  .chip.thinking {
+    border-color: var(--watch);
+    animation: blink 1s steps(2) infinite;
+  }
+  .quick button {
+    font-size: 12px;
+  }
+  .voice-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .ask {
+    flex: 1;
+    min-width: 260px;
+    display: flex;
+    gap: 6px;
+  }
+  .ask input {
+    flex: 1;
+    min-width: 0;
+  }
+  .hint {
+    margin: 0;
+    font-size: 12px;
   }
   .speaking {
     color: var(--crit);

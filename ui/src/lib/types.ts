@@ -164,8 +164,18 @@ export interface CommsState {
   overrideRemainingMs: number;
   pttActive: boolean;
   ttsAvailable: boolean;
+  /** Voice input: speech-to-text sidecar reachable. */
+  sttAvailable: boolean;
+  /** Voice input: LLM reachable with the configured model. */
+  llmAvailable: boolean;
+  /** A microphone is open for push-to-talk. */
+  micAvailable: boolean;
+  /** The engineer is transcribing / thinking about an answer. */
+  thinking: boolean;
   speaking: boolean;
   lastSpokenLine: string | null;
+  /** The driver's last radio message (transcript or typed question). */
+  lastDriverLine: string | null;
   pendingSuggestions: Suggestion[];
 }
 
@@ -230,6 +240,8 @@ export type ClientCommand =
   | { type: 'suggestion.dismiss'; id: string; token?: string }
   | { type: 'comms.setMode'; mode: CommsMode; token?: string }
   | { type: 'comms.mute'; muted: boolean; token?: string }
+  | { type: 'ptt.set'; active: boolean; token?: string }
+  | { type: 'driver.ask'; text: string; token?: string }
   | { type: 'select.car'; carIndex: number };
 
 /** Row from GET /api/sessions/:id/laps */

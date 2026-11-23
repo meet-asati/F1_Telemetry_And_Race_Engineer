@@ -54,6 +54,13 @@ impl Default for ArbConfig {
             ("flag_red", 5_000),
             ("flag_chequered", 5_000),
             ("penalty", 3_000),
+            // Race moments.
+            ("pb", 90_000),
+            ("fastest_lap", 60_000),
+            ("position", 25_000),
+            ("pit_done", 30_000),
+            ("last_lap", 600_000),
+            ("five_to_go", 600_000),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
@@ -221,10 +228,11 @@ impl Arbitrator {
         self.override_until_ms = self.override_until_ms.max(now + self.cfg.override_ms);
     }
 
-    /// Queue an answer to a driver question (P1).
-    pub fn driver_answer(&mut self, text: String, now: u64) -> String {
+    /// Queue an answer to a driver question (P1). `source` is `Rule` for
+    /// telemetry-templated answers and `Llm` for model answers.
+    pub fn driver_answer(&mut self, text: String, source: RadioSource, now: u64) -> String {
         let id = self.new_id();
-        self.queue.push(Queued { id: id.clone(), key: None, text, priority: Priority::P1, source: RadioSource::Llm, attachments: vec![], created_ms: now });
+        self.queue.push(Queued { id: id.clone(), key: None, text, priority: Priority::P1, source, attachments: vec![], created_ms: now });
         id
     }
 
@@ -303,7 +311,8 @@ impl Arbitrator {
         let speaking = now < self.speaking_until_ms;
         let idx = self.queue.iter().position(|q| match q.priority {
             Priority::P0 => !speaking || self.speaking_priority == Some(Priority::P2),
-            Priority::P1 => !speaking,
+            // Radio is half-duplex: nothing but P0 while the driver is transmitting.
+            Priority::P1 => !speaking && !self.ptt_active,
             Priority::P2 => !speaking && self.gate_open(ctx, now),
         })?;
         let q = self.queue.remove(idx);
@@ -330,6 +339,8 @@ impl Arbitrator {
             speaking: now < self.speaking_until_ms,
             last_spoken_line: self.last_spoken.clone(),
             pending_suggestions: self.suggestions.iter().map(|(s, _)| s.clone()).collect(),
+            // Voice-input fields are filled in by the comms actor.
+            ..Default::default()
         }
     }
 }

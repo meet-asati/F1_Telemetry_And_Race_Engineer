@@ -12,7 +12,7 @@ Specs: [PRD.md](PRD.md) · [UI.md](UI.md)
 | M2 `race-state` — state, gaps, wear/fuel projections, SQLite | ✅ |
 | M3 `pitwall-server` + `ui` — WebSocket/REST, 7-monitor pit wall | ✅ |
 | M4 `comms` + local radio — rule engine, arbitrator, TTS → radio FX → speakers | ✅ |
-| M5 Voice input (PTT, whisper, LLM Q&A) | planned |
+| M5 Voice input: push-to-talk, whisper, telemetry-first answers + LLM, engineer persona | ✅ |
 | M6 Discord | planned |
 | M7 Debrief | planned |
 
@@ -63,14 +63,54 @@ cargo run --release -p pitwall-server -- --replay captures/x.bin --replay-speed 
 cargo run --release -p f1-synth -- --format 2022 --no-send --speed 0 --record captures/synth.bin
 ```
 
-## Radio voice (optional)
+## Radio voice and talking to your engineer
 
-Without a TTS server, radio calls show as text on the pit wall. To hear them, run one of these and set `[tts]` in `config.toml` (copy `config.example.toml`):
+Everything runs locally. Each piece is optional, and the daemon degrades gracefully: with no voice server, calls show as text; with no LLM, common questions are still answered from telemetry.
 
-- **Piper:** `python -m piper.http_server -m en_GB-alan-medium --port 5000`, then use `engine = "piper"`.
-- **Kokoro:** run Kokoro-FastAPI on port 8880, then use `engine = "kokoro"` and `url = "http://127.0.0.1:8880"`.
+Copy `config.example.toml` to `config.toml` first. The defaults below already match it.
 
-Audio goes through a radio filter and plays on the default output device. Pick another device with `[audio] device = "..."`; run `pitwall-server --list-audio-devices` to see the names. Common phrases are cached in `tts-cache/`.
+### 1. The engineer's voice: Kokoro
+
+```sh
+docker run -d --name kokoro -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+```
+
+The default voice is `bm_george`, a calm, low British male. Try `bm_fable` or `bm_lewis`, or blend them with `voice = "bm_george+bm_fable"` under `[tts]`. Urgent calls come slightly quicker and routine calls slightly calmer; set the overall rate with `speed`. The CPU image keeps your GPU free for the game.
+
+### 2. Hearing you: whisper.cpp
+
+1. Download `whisper-bin-x64.zip` from the whisper.cpp GitHub releases.
+2. Download the `ggml-base.en.bin` model (or `ggml-small.en.bin` for better accuracy at more CPU).
+3. Run:
+
+```sh
+whisper-server.exe -m ggml-base.en.bin --port 8178
+```
+
+Any OpenAI-compatible transcription server also works (`[stt] engine = "openai"`).
+
+### 3. Thinking: Ollama (only for open-ended questions)
+
+```sh
+ollama pull qwen2.5:3b
+```
+
+Set a different model under `[llm] model` (e.g. `llama3.1:8b` if you have the VRAM to spare next to the game). Common questions never reach the LLM:
+- gap ahead or behind, the leader
+- tyres, including "will they make the end?", and temperatures
+- fuel, battery, brakes, damage, weather, pace
+- position, laps left, penalties, flags
+- "should I box?"
+
+### 4. Push-to-talk
+
+1. In the game, go to **Controls**. Map a wheel button to **UDP Action 1** (or set `[voice] ptt_button`). Make sure UDP telemetry is on.
+2. Hold the button and talk. The engineer's line cuts out, you hear a chirp, and you get an answer when you release.
+3. Without a wheel binding, use the **Hold to talk** button on the driver view (`/driver`) or in the AI Engineer monitor. That monitor also has an **Ask engineer** box for typed questions.
+
+Run `pitwall-server --list-audio-devices` to see speaker and microphone names for `[audio] device` and `[voice] input_device`. Set `[comms] driver_name` so the engineer can use your first name now and then.
+
+Check it is all up in the AI Engineer monitor: **MIC**, **SPEECH-TO-TEXT**, **LLM** and **VOICE** should all read ready.
 
 ## Friend on the pit wall (Tailscale)
 
@@ -83,10 +123,10 @@ Audio goes through a radio filter and plays on the default output device. Pick a
 ```text
 crates/f1-udp          per-year UDP codec → version-neutral packets; capture files
 crates/race-state      RaceState, timing-line gaps, metrics, wire snapshot types, SQLite
-crates/comms           rule engine + arbitrator (P0/P1/P2, gating, cooldowns, copilot)
-crates/voice-comms     radio DSP, resampling, TTS cache, cpal playback
-crates/ai-sidecar      TTS HTTP clients (STT/LLM in M5)
-crates/pitwall-server  the daemon (ingest, actors, axum WS/REST, static UI)
+crates/comms           rule engine + persona, arbitrator (P0/P1/P2, gating, cooldowns, copilot), driver Q&A
+crates/voice-comms     radio DSP, speech text normalisation, TTS cache, cpal playback + mic capture
+crates/ai-sidecar      HTTP clients: TTS (Kokoro/Piper), STT (whisper), LLM (Ollama/OpenAI-compatible)
+crates/pitwall-server  the daemon (ingest, actors, voice/PTT, axum WS/REST, static UI)
 tools/f1-synth         synthetic race generator
 ui/                    SvelteKit pit wall
 ```

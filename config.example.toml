@@ -23,14 +23,53 @@ record = false
 dir = "captures"
 
 [tts]
-# "none", "piper" or "kokoro".
-#   Piper:  python -m piper.http_server -m en_GB-alan-medium --port 5000
-#   Kokoro: Kokoro-FastAPI on port 8880 (OpenAI-compatible /v1/audio/speech)
-engine = "none"
-url = "http://127.0.0.1:5000"
-voice = "am_michael"
+# The engineer's voice. "kokoro" (default), "piper" or "none" (text only).
+#   Kokoro: docker run -d -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+#   Piper:  python -m piper.http_server -m en_GB-alan-medium --port 5000  (url = "http://127.0.0.1:5000")
+engine = "kokoro"
+url = "http://127.0.0.1:8880"
+# British male voices: bm_george (calm, low; default), bm_fable, bm_lewis, bm_daniel.
+# Kokoro-FastAPI can blend voices, e.g. "bm_george+bm_fable".
+voice = "bm_george"
 model = "kokoro"
+# Base speaking rate. Urgent calls are delivered ~8% quicker, routine ones ~3% calmer.
+speed = 1.0
 timeout_ms = 8000
+
+[stt]
+# Speech-to-text for push-to-talk. "whispercpp" (default), "openai" or "none".
+#   whisper.cpp: whisper-server -m ggml-base.en.bin --port 8178
+#   OpenAI-compatible (speaches / faster-whisper-server): engine = "openai", url = "http://127.0.0.1:8000"
+engine = "whispercpp"
+url = "http://127.0.0.1:8178"
+model = "Systran/faster-whisper-base.en"
+language = "en"
+timeout_ms = 8000
+
+[llm]
+# Free-form driver questions. Common ones (gaps, tyres, fuel, box?) are answered
+# from telemetry instantly; only the rest go to the model.
+# "ollama" (default), "openai" (llama.cpp server, LM Studio ...) or "none".
+#   ollama pull qwen2.5:3b
+engine = "ollama"
+url = "http://127.0.0.1:11434"
+model = "qwen2.5:3b"
+api_key = ""
+max_tokens = 90
+temperature = 0.3
+timeout_ms = 12000
+
+[voice]
+# Push-to-talk. In the game's controls, map a wheel button to "UDP Action 1" (or the number below).
+enabled = true
+# Substring of the microphone name (run with --list-audio-devices). Empty = default mic.
+input_device = ""
+ptt_button = 1
+# "hold" = talk while held (like a real radio); "toggle" = press to start, press to stop.
+ptt_mode = "hold"
+# Safety cut-off if a release packet is lost.
+max_ptt_ms = 15000
+min_ptt_ms = 350
 
 [audio]
 enabled = true
@@ -41,6 +80,8 @@ cache_dir = "tts-cache"
 [comms]
 # "auto" speaks callouts; "copilot" queues proactive callouts for approval on the pit wall.
 mode = "auto"
+# Your first name; the engineer uses it now and then (praise, the finish).
+driver_name = ""
 override_ms = 10000
 p2_max_age_ms = 20000
 gate_throttle = 0.85

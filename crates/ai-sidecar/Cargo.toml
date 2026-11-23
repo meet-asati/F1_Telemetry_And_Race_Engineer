@@ -1,6 +1,6 @@
 [package]
 name = "ai-sidecar"
-description = "HTTP clients for local AI sidecars (TTS now; STT and LLM in M5)"
+description = "HTTP clients for local AI sidecars: TTS (Kokoro/Piper), STT (whisper) and the LLM (Ollama)"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -10,8 +10,9 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 hound = "3.5"
 
 [dev-dependencies]
 tokio.workspace = true
+axum = { version = "0.8", features = ["multipart"] }

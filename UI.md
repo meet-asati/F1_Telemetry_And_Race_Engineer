@@ -79,9 +79,9 @@ Clicking a monitor opens it as a large **in-window popup monitor** (same bezel a
 
 - A large-type, glanceable single screen for a phone, tablet or second monitor:
   - position, gap ahead/behind, last lap vs. best, fuel delta, ERS %, worst tyre wear;
-  - the last radio line;
+  - the last radio exchange (the driver's question and the engineer's reply);
   - the Safety Car / VSC banner.
-- No controls beyond mute. (An in-game overlay on top of a fullscreen game isn't practical, so it is out of scope.)
+- Controls: a large **Hold to talk** button (touch-friendly) and mute. (An in-game overlay on top of a fullscreen game isn't practical, so it is out of scope.)
 
 ### 2.5 Rendering Budget
 
@@ -173,12 +173,13 @@ Clicking a monitor opens it as a large **in-window popup monitor** (same bezel a
 - **Tile Summary:**
   - The active comms mode (`Auto-Speak` / `Copilot Approval`) and the mute state.
   - The pending AI suggestion count.
-  - The last spoken engineer message.
-  - PTT / wake-word status and TTS sidecar health.
+  - The driver's last radio message and the last engineer message (with on-air / thinking indicators).
+  - Status: PTT (ready / live / no mic), speech-to-text, LLM and voice (TTS) health.
 - **Click-to-Inspect View:**
   - **Copilot Approval Queue.** Pending P2 suggestions, each with:
     - a priority badge and an expiry countdown;
     - **Approve & Speak**, **Edit & Send** and **Dismiss** actions.
+  - **Driver Voice.** Mic / speech-to-text / LLM / voice status chips, a **Hold to talk** button (keys the pit-wall PC's microphone), an **Ask engineer** box for typed driver questions, and quick questions ("Gap behind?", "Should I box this lap?").
   - **Manual Radio Console.** Quick preset buttons + free-text input. Messages go through the radio TTS pipeline to local playback, and to Discord voice when that is enabled.
   - **Radio & Prompt Audit Log.** A chronological feed of:
     - friend messages, rule callouts, LLM answers and driver voice queries;
@@ -385,8 +386,18 @@ export interface CommsState {
   overrideRemainingMs: number;
   pttActive: boolean;
   ttsAvailable: boolean;
+  /** Voice input: speech-to-text sidecar reachable. */
+  sttAvailable: boolean;
+  /** Voice input: LLM reachable with the configured model. */
+  llmAvailable: boolean;
+  /** A microphone is open for push-to-talk. */
+  micAvailable: boolean;
+  /** The engineer is transcribing / thinking about an answer. */
+  thinking: boolean;
   speaking: boolean;
   lastSpokenLine: string | null;
+  /** The driver's last radio message (transcript or typed question). */
+  lastDriverLine: string | null;
   pendingSuggestions: Suggestion[];
 }
 
@@ -451,6 +462,8 @@ export type ClientCommand =
   | { type: 'suggestion.dismiss'; id: string; token?: string }
   | { type: 'comms.setMode'; mode: CommsMode; token?: string }
   | { type: 'comms.mute'; muted: boolean; token?: string }
+  | { type: 'ptt.set'; active: boolean; token?: string }
+  | { type: 'driver.ask'; text: string; token?: string }
   | { type: 'select.car'; carIndex: number };
 
 /** Row from GET /api/sessions/:id/laps */

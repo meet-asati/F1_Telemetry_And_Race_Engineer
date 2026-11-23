@@ -143,13 +143,16 @@ This project builds a **Rust-backed AI Race Engineer and Duo Pit-Wall system**:
 
 #### Push-to-talk (bindable `UDP Action N`)
 
-- Capture 16kHz mono PCM via `cpal` while the button is held, then send the audio to the `whisper.cpp` server for transcription.
+- The microphone stream stays open (with a `300ms` pre-roll, so the first word is never clipped). While the button is held, `cpal` captures mono PCM. On release it is resampled to 16kHz and sent to the `whisper.cpp` server (or any OpenAI-compatible `/v1/audio/transcriptions` endpoint) with a racing-vocabulary prompt.
+- **Half-duplex radio.** Keying up stops the engineer mid-sentence and plays a short chirp. Only P0 calls play while the driver is transmitting.
 - **Stuck-PTT guard.** `BUTN` events are sent on state change over lossy UDP, so a lost release packet could leave PTT stuck. Enforce a maximum capture length (default `15s`).
 - **Optional toggle mode.** Press to start, press to stop.
+- **Other inputs.** A hold-to-talk button on the driver view and the Comms monitor uses the same path (`ptt.set`). Typed questions (`driver.ask`) skip the microphone.
+- Clips under `350ms` or near-silent are dropped, and whisper's silence hallucinations ("Thank you.") are filtered out.
 
-#### Wake word / VAD fallback
+#### Wake word / VAD fallback *(deferred)*
 
-- Monitor mic energy/VAD plus a wake phrase, but only while PTT is inactive and the user isn't actively speaking on Discord.
+- Monitor mic energy/VAD plus a wake phrase, but only while PTT is inactive and the user isn't actively speaking on Discord. Not built in M5; wheel PTT covers the need.
 
 #### Rule engine (proactive callouts)
 
@@ -164,18 +167,24 @@ This project builds a **Rust-backed AI Race Engineer and Duo Pit-Wall system**:
   - wing or floor damage.
 - No LLM is involved, so callouts can't hallucinate.
 
-#### LLM engineer (driver questions only)
+#### Engineer persona
 
-- Send compact JSON `RaceState` + the transcribed question to the `Ollama` / `llama.cpp` HTTP API.
-- Use a concise, factual race-engineer system prompt, grounded strictly in the supplied telemetry.
-- **Default model:** ~3–4B Q4. The model name and sidecar URL are configurable.
-- Optionally the LLM can also rephrase a Copilot edit.
+- One consistent voice across callouts, answers and the LLM: a calm, precise, warm British race engineer. Information first, then at most one clear instruction. Rivals are named by surname. Praise is given when it is earned (personal best, fastest lap, a pass, a good stop, the finish). Words are kept to what the moment allows.
+- Proactive "race moments" on top of the warnings: personal best, fastest lap, positions gained or lost, good pit stop and fitted compound, five laps to go, last lap, and a result-aware chequered-flag line. The driver's first name (`[comms] driver_name`) is used sparingly.
+
+#### Driver questions: telemetry first, LLM second
+
+- A deterministic answerer handles the common radio questions straight from `RaceState`, instantly and always correctly: radio check, gap ahead/behind/leader with a pace comparison, tyres (including "will they make the end?"), temperatures, brakes, fuel, ERS, position, laps left, damage, weather, pace, penalties, flags, strategy, and "should I box?" (a yes/no decision).
+- Open-ended questions ("what if…", "why…", "what should…") and anything unrecognised go to the LLM. The engineer first says "Copy, stand by."
+- The LLM (`Ollama` `/api/chat`, or any OpenAI-compatible `/v1/chat/completions`) gets a compact text race brief and the persona system prompt. The prompt allows at most two radio sentences, using only facts from the brief, with no lists, markdown or "as an AI". Replies are trimmed to two sentences.
+- **Default model:** `qwen2.5:3b` (Q4, about 2 GB). Larger models such as `llama3.1:8b` also work if VRAM allows alongside the game. The model is warmed up at start and kept loaded (`keep_alive`). Health only reports ready when the configured model is actually pulled.
 
 #### TTS and radio DSP
 
 - Synthesize speech through a single TTS interface, which supports:
-  - `Piper` (HTTP server);
-  - `Kokoro` (OpenAI-compatible `/v1/audio/speech`).
+  - `Kokoro` (default; OpenAI-compatible `/v1/audio/speech`, voice `bm_george`, blends such as `bm_george+bm_fable`);
+  - `Piper` (HTTP server).
+- **Delivery.** P0 calls are synthesized about 8% quicker and routine P2 calls about 3% calmer. Text is normalised for speech first: lap times as engineers say them ("one oh-seven point four"), signs ("minus 0.3"), units ("percent", "degrees", "seconds") and abbreviations ("D-R-S", "front-left").
 - Templated phrases are synthesized once and **cached on disk by text hash**.
 - Apply a radio bandpass filter (`300Hz–3400Hz`), soft compression and light static. Then resample (`rubato`) to the output device rate, and later to `48kHz` stereo for Discord.
 - **Graceful degradation.** If no TTS sidecar is reachable, callouts still appear as text in the pit-wall radio log and the daemon keeps running.
@@ -305,7 +314,7 @@ F1 Race Engineer/
 | **M2** | `race-state`: live state, derived metrics (gaps, wear slope, fuel, pit window), SQLite persistence. |
 | **M3** | `pitwall-server` + `ui`: WebSocket/REST, the 7-monitor pit wall, inspectors, presets, pop-outs, driver view. |
 | **M4** | `comms` + `voice-comms` + TTS: rule engine, arbitrator, local radio playback, Copilot approval flow. *(End of first build.)* |
-| **M5** | Voice input: `BUTN` PTT, `cpal` capture, whisper STT, LLM driver Q&A, wake word/VAD. |
+| **M5** | Voice input: `BUTN` PTT (hold/toggle), `cpal` capture, whisper STT, telemetry-first driver Q&A + LLM fallback, engineer persona, Kokoro voice. *(Wake word/VAD deferred.)* |
 | **M6** | Discord: `songbird` voice streaming, friend-speaking override, slash commands. |
 | **M7** | Debrief: `plotters` PNG + stint summary (Discord post + UI). |
 | **M8** *(optional)* | Tauri tray shell: start/stop, audio-device picker, autostart. Reuses the same UI and daemon. |

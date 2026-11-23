@@ -3,11 +3,13 @@
 //! * db writer   — persists sessions/laps/radio/outlines off the hot path
 //! * comms       — rule engine + arbitrator; decides what to say
 //! * audio       — TTS (cached) → radio FX → local playback
+//! * voice       — driver push-to-talk → STT → answers (see `voice.rs`)
 
 use crate::ingest::IngestStats;
+use crate::voice::{VoiceCmd, VoiceStatus};
 use ai_sidecar::TtsClient;
 use axum::extract::ws::Utf8Bytes;
-use comms::{ArbConfig, Arbitrator, GateCtx, RuleEngine, Utterance};
+use comms::{ArbConfig, Arbitrator, GateCtx, RuleConfig, RuleEngine, Utterance};
 use f1_udp::ParsedPacket;
 use race_state::db::{Db, RadioRow};
 use race_state::snapshot::*;
@@ -48,6 +50,7 @@ pub struct HealthInfo {
     pub tts_engine: String,
     pub tts_available: bool,
     pub audio_device: Option<String>,
+    pub mic_device: Option<String>,
     pub db_enabled: bool,
 }
 
@@ -71,11 +74,18 @@ pub enum StateCtl {
 pub enum CommsCmd {
     Client(ClientCommand),
     RaceEvent(PitWallEvent),
-    /// Wheel-button state (PTT, used from M5).
-    #[allow(dead_code)]
+    /// Wheel-button state (push-to-talk).
     Buttons(u32),
     SpeakingUntil(u64),
     TtsAvailable(bool),
+    /// The driver is transmitting.
+    PttActive(bool),
+    /// What the driver said (transcript or typed question).
+    DriverSaid(String),
+    /// The engineer's reply to the driver (P1).
+    DriverAnswer { text: String, source: RadioSource },
+    Thinking(bool),
+    VoiceStatus(VoiceStatus),
 }
 
 // ------------------------------------------------------------ state actor
@@ -216,6 +226,8 @@ pub async fn run_db(db: Option<Db>, mut rx: mpsc::UnboundedReceiver<DbCmd>, ctl:
 
 pub struct CommsActor {
     pub cfg: ArbConfig,
+    pub rules: RuleConfig,
+    pub voice: mpsc::Sender<VoiceCmd>,
     pub initial_mode: CommsMode,
     pub rx: mpsc::Receiver<CommsCmd>,
     pub snapshot: watch::Receiver<Arc<TelemetrySnapshot>>,
@@ -248,7 +260,10 @@ pub fn publish(events: &broadcast::Sender<Utf8Bytes>, db: &mpsc::UnboundedSender
 
 impl CommsActor {
     pub async fn run(mut self) {
-        let mut rules = RuleEngine::default();
+        let mut rules = RuleEngine::new(self.rules.clone());
+        let mut voice_status = VoiceStatus::default();
+        let mut thinking = false;
+        let mut last_driver_line: Option<String> = None;
         let mut arb = Arbitrator::new(self.cfg.clone());
         arb.set_mode(self.initial_mode);
         let mut tick = tokio::time::interval(Duration::from_millis(50));
@@ -272,6 +287,13 @@ impl CommsActor {
                             ClientCommand::SuggestionDismiss { id, .. } => { arb.dismiss(&id, now); }
                             ClientCommand::CommsSetMode { mode, .. } => arb.set_mode(mode),
                             ClientCommand::CommsMute { muted, .. } => arb.set_muted(muted),
+                            ClientCommand::PttSet { active, .. } => { let _ = self.voice.try_send(VoiceCmd::Ptt(active)); }
+                            ClientCommand::DriverAsk { text, .. } => {
+                                let text = text.trim().to_string();
+                                if !text.is_empty() {
+                                    let _ = self.voice.try_send(VoiceCmd::Ask(text));
+                                }
+                            }
                             ClientCommand::SelectCar { .. } => {}
                         },
                         CommsCmd::RaceEvent(e) => {
@@ -280,9 +302,18 @@ impl CommsActor {
                                 arb.submit(a, now);
                             }
                         }
-                        CommsCmd::Buttons(_) => { /* PTT arrives in M5 */ }
+                        CommsCmd::Buttons(b) => { let _ = self.voice.try_send(VoiceCmd::Buttons(b)); }
                         CommsCmd::SpeakingUntil(t) => arb.set_speaking_until(t),
                         CommsCmd::TtsAvailable(v) => arb.set_tts_available(v),
+                        CommsCmd::PttActive(v) => arb.set_ptt_active(v),
+                        CommsCmd::DriverSaid(text) => {
+                            last_driver_line = Some(text.clone());
+                            let ev = PitWallEvent::Radio { at_ms: now, source: RadioSource::Driver, priority: Priority::P1, text, outcome: RadioOutcome::Spoken, attachments: vec![] };
+                            publish(&self.events, &self.db, &ev);
+                        }
+                        CommsCmd::DriverAnswer { text, source } => { arb.driver_answer(text, source, now); }
+                        CommsCmd::Thinking(v) => thinking = v,
+                        CommsCmd::VoiceStatus(v) => voice_status = v,
                     }
                 }
                 _ = tick.tick() => {
@@ -310,7 +341,12 @@ impl CommsActor {
                     for e in arb.drain_events() {
                         publish(&self.events, &self.db, &e);
                     }
-                    let st = arb.state(now);
+                    let mut st = arb.state(now);
+                    st.stt_available = voice_status.stt;
+                    st.llm_available = voice_status.llm;
+                    st.mic_available = voice_status.mic;
+                    st.thinking = thinking;
+                    st.last_driver_line = last_driver_line.clone();
                     self.state_out.send_if_modified(|cur| {
                         let changed = serde_json::to_string(cur).ok() != serde_json::to_string(&st).ok();
                         if changed { *cur = st; }
@@ -335,15 +371,22 @@ pub struct AudioActor {
 }
 
 impl AudioActor {
-    async fn render(&self, text: &str, seed: u32) -> anyhow::Result<(Vec<f32>, &Arc<AudioPlayer>)> {
+    async fn render(&self, text: &str, priority: Priority, seed: u32) -> anyhow::Result<(Vec<f32>, &Arc<AudioPlayer>)> {
         let player = self.player.as_ref().ok_or_else(|| anyhow::anyhow!("no audio device"))?;
-        let ns = self.tts.cache_namespace();
-        let pcm = match self.cache.as_ref().and_then(|c| c.get(&ns, text)) {
+        // Urgent calls come a touch quicker, routine ones a touch calmer.
+        let speed = match priority {
+            Priority::P0 => 1.08,
+            Priority::P1 => 1.0,
+            Priority::P2 => 0.97,
+        };
+        let spoken = voice_comms::speechify(text);
+        let ns = self.tts.cache_namespace(speed);
+        let pcm = match self.cache.as_ref().and_then(|c| c.get(&ns, &spoken)) {
             Some(p) => p,
             None => {
-                let p = self.tts.synthesize(text).await?;
+                let p = self.tts.synthesize_with(&spoken, speed).await?;
                 if let Some(c) = &self.cache {
-                    if let Err(e) = c.put(&ns, text, &p) {
+                    if let Err(e) = c.put(&ns, &spoken, &p) {
                         tracing::debug!("tts cache write failed: {e}");
                     }
                 }
@@ -365,7 +408,7 @@ impl AudioActor {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let started = now_ms();
             let outcome = if self.tts.enabled() && self.player.is_some() {
-                match self.render(&u.text, seed).await {
+                match self.render(&u.text, u.priority, seed).await {
                     Ok((samples, player)) => match player.play(&samples, u.interrupt) {
                         Ok(dur) => {
                             let _ = self.comms.send(CommsCmd::SpeakingUntil(now_ms() + dur)).await;

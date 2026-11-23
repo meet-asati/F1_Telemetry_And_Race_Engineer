@@ -1,6 +1,6 @@
 //! Configuration: `config.toml` (optional) overlaid by CLI flags.
 
-use ai_sidecar::TtsConfig;
+use ai_sidecar::{LlmConfig, SttConfig, TtsConfig};
 use clap::Parser;
 use race_state::Thresholds;
 use serde::{Deserialize, Serialize};
@@ -39,9 +39,12 @@ pub struct Args {
     /// SQLite database path (overrides config). Use ":memory:" for none.
     #[arg(long)]
     pub db: Option<String>,
-    /// List audio output devices and exit.
+    /// List audio output and input (microphone) devices and exit.
     #[arg(long)]
     pub list_audio_devices: bool,
+    /// Disable voice input (push-to-talk, speech-to-text, LLM answers).
+    #[arg(long)]
+    pub no_voice: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +56,9 @@ pub struct Config {
     pub db: DbConfig,
     pub capture: CaptureConfig,
     pub tts: TtsConfig,
+    pub stt: SttConfig,
+    pub llm: LlmConfig,
+    pub voice: VoiceConfig,
     pub audio: AudioConfig,
     pub comms: CommsConfig,
     pub thresholds: Thresholds,
@@ -125,11 +131,43 @@ impl Default for AudioConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PttMode {
+    /// Talk while the button is held (like a real radio).
+    Hold,
+    /// Press to start, press again to stop.
+    Toggle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceConfig {
+    /// Push-to-talk + speech-to-text + answers.
+    pub enabled: bool,
+    /// Substring of the microphone name; empty = system default.
+    pub input_device: String,
+    /// Wheel button mapped to "UDP Action N" in the game's controls (1-12).
+    pub ptt_button: u8,
+    pub ptt_mode: PttMode,
+    /// A stuck button (lost release packet) ends the clip after this long.
+    pub max_ptt_ms: u64,
+    /// Clips shorter than this are treated as accidental presses.
+    pub min_ptt_ms: u64,
+}
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self { enabled: true, input_device: String::new(), ptt_button: 1, ptt_mode: PttMode::Hold, max_ptt_ms: 15_000, min_ptt_ms: 350 }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CommsConfig {
     /// "auto" or "copilot".
     pub mode: String,
+    /// The driver's first name; the engineer uses it sparingly.
+    pub driver_name: String,
     pub override_ms: u64,
     pub p2_max_age_ms: u64,
     pub gate_throttle: f32,
@@ -137,7 +175,7 @@ pub struct CommsConfig {
 }
 impl Default for CommsConfig {
     fn default() -> Self {
-        Self { mode: "auto".into(), override_ms: 10_000, p2_max_age_ms: 20_000, gate_throttle: 0.85, gate_steer: 0.15 }
+        Self { mode: "auto".into(), driver_name: String::new(), override_ms: 10_000, p2_max_age_ms: 20_000, gate_throttle: 0.85, gate_steer: 0.15 }
     }
 }
 
@@ -172,6 +210,10 @@ impl Config {
         if args.no_audio {
             cfg.audio.enabled = false;
         }
+        if args.no_voice {
+            cfg.voice.enabled = false;
+        }
+        cfg.voice.ptt_button = cfg.voice.ptt_button.clamp(1, 12);
         cfg.http.token = cfg.http.token.filter(|t| !t.is_empty());
         Ok(cfg)
     }
@@ -187,5 +229,10 @@ mod tests {
         let cfg: Config = toml::from_str(text).unwrap();
         assert_eq!(cfg.udp.bind, "0.0.0.0:20777");
         assert_eq!(cfg.comms.override_ms, 10_000);
+        assert_eq!(cfg.tts.engine, ai_sidecar::TtsKind::Kokoro);
+        assert_eq!(cfg.tts.voice, "bm_george");
+        assert_eq!(cfg.stt.engine, ai_sidecar::SttKind::Whispercpp);
+        assert_eq!(cfg.llm.model, "qwen2.5:3b");
+        assert_eq!(cfg.voice.ptt_mode, PttMode::Hold);
     }
 }

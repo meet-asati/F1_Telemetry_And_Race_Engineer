@@ -1,18 +1,24 @@
-//! HTTP clients for local AI sidecars.
+//! HTTP clients for local AI sidecars. Every call has a timeout; failures are
+//! returned as errors and never panic, so a missing sidecar only degrades the
+//! radio (text-only, or no voice questions) and never the telemetry.
 //!
-//! M4 ships text-to-speech:
-//! * **Piper** HTTP server (`python -m piper.http_server -m <voice>`): `POST /`
-//!   with `{"text": "..."}` returns a WAV file.
-//! * **Kokoro** via an OpenAI-compatible server (e.g. Kokoro-FastAPI):
-//!   `POST /v1/audio/speech` with `{"model","input","voice","response_format":"wav"}`.
-//!
-//! Speech-to-text (whisper.cpp) and the LLM (Ollama) clients arrive in M5.
-//! Every call has a timeout; failures are returned as errors and never panic.
+//! * [`tts`]: **Kokoro** (OpenAI-compatible `/v1/audio/speech`, e.g.
+//!   Kokoro-FastAPI) or **Piper** (`python -m piper.http_server`).
+//! * [`stt`]: **whisper.cpp** `whisper-server` (`/inference`) or any
+//!   OpenAI-compatible `/v1/audio/transcriptions` endpoint.
+//! * [`llm`]: **Ollama** (`/api/chat`) or any OpenAI-compatible
+//!   `/v1/chat/completions` endpoint.
 
-use anyhow::{bail, Context};
-use serde::{Deserialize, Serialize};
+pub mod llm;
+pub mod stt;
+pub mod tts;
+
+pub use llm::{LlmClient, LlmConfig, LlmKind};
+pub use stt::{SttClient, SttConfig, SttKind};
+pub use tts::{TtsClient, TtsConfig, TtsKind};
+
+use anyhow::Context;
 use std::io::Cursor;
-use std::time::Duration;
 
 /// Mono PCM audio.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +52,48 @@ impl Pcm {
         Ok(Pcm { samples, sample_rate: spec.sample_rate })
     }
 
+    /// Linear-interpolation resample (good enough for speech).
+    pub fn resampled(&self, to_rate: u32) -> Pcm {
+        if self.sample_rate == to_rate || self.samples.is_empty() || self.sample_rate == 0 {
+            return Pcm { samples: self.samples.clone(), sample_rate: to_rate.max(1) };
+        }
+        let ratio = self.sample_rate as f64 / to_rate as f64;
+        let n = (self.samples.len() as f64 / ratio).floor() as usize;
+        let samples = (0..n)
+            .map(|i| {
+                let pos = i as f64 * ratio;
+                let k = pos as usize;
+                let f = (pos - k as f64) as f32;
+                let a = self.samples[k];
+                let b = *self.samples.get(k + 1).unwrap_or(&a);
+                a + (b - a) * f
+            })
+            .collect();
+        Pcm { samples, sample_rate: to_rate }
+    }
+
+    /// Encode as 16-bit PCM mono WAV (what speech-to-text servers expect).
+    pub fn to_wav_i16(&self) -> anyhow::Result<Vec<u8>> {
+        let spec = hound::WavSpec { channels: 1, sample_rate: self.sample_rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut cur = Cursor::new(Vec::new());
+        {
+            let mut w = hound::WavWriter::new(&mut cur, spec)?;
+            for s in &self.samples {
+                w.write_sample((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)?;
+            }
+            w.finalize()?;
+        }
+        Ok(cur.into_inner())
+    }
+
+    /// Root-mean-square level (0..1), used to drop silent push-to-talk clips.
+    pub fn rms(&self) -> f32 {
+        if self.samples.is_empty() {
+            return 0.0;
+        }
+        (self.samples.iter().map(|s| s * s).sum::<f32>() / self.samples.len() as f32).sqrt()
+    }
+
     /// Encode as 32-bit float mono WAV.
     pub fn to_wav(&self) -> anyhow::Result<Vec<u8>> {
         let spec = hound::WavSpec { channels: 1, sample_rate: self.sample_rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
@@ -58,106 +106,6 @@ impl Pcm {
             w.finalize()?;
         }
         Ok(cur.into_inner())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum TtsKind {
-    Piper,
-    Kokoro,
-    #[default]
-    None,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TtsConfig {
-    pub engine: TtsKind,
-    /// Base URL, e.g. `http://127.0.0.1:5000` (Piper) or `http://127.0.0.1:8880` (Kokoro).
-    pub url: String,
-    /// Kokoro voice id (ignored by Piper, whose voice is chosen at server start).
-    pub voice: String,
-    /// Kokoro model name.
-    pub model: String,
-    pub timeout_ms: u64,
-}
-
-impl Default for TtsConfig {
-    fn default() -> Self {
-        Self { engine: TtsKind::None, url: "http://127.0.0.1:5000".into(), voice: "am_michael".into(), model: "kokoro".into(), timeout_ms: 8000 }
-    }
-}
-
-#[derive(Clone)]
-pub struct TtsClient {
-    cfg: TtsConfig,
-    http: reqwest::Client,
-}
-
-impl TtsClient {
-    pub fn new(cfg: TtsConfig) -> anyhow::Result<Self> {
-        let http = reqwest::Client::builder().timeout(Duration::from_millis(cfg.timeout_ms.max(500))).build()?;
-        Ok(Self { cfg, http })
-    }
-
-    pub fn enabled(&self) -> bool {
-        self.cfg.engine != TtsKind::None
-    }
-
-    /// Identifies engine + voice so cached audio is never reused across voices.
-    pub fn cache_namespace(&self) -> String {
-        match self.cfg.engine {
-            TtsKind::Piper => format!("piper|{}", self.cfg.url),
-            TtsKind::Kokoro => format!("kokoro|{}|{}", self.cfg.model, self.cfg.voice),
-            TtsKind::None => "none".into(),
-        }
-    }
-
-    /// Is the sidecar reachable? (Any HTTP response counts.)
-    pub async fn health(&self) -> bool {
-        if !self.enabled() {
-            return false;
-        }
-        self.http.get(&self.cfg.url).timeout(Duration::from_secs(2)).send().await.is_ok()
-    }
-
-    pub async fn synthesize(&self, text: &str) -> anyhow::Result<Pcm> {
-        let base = self.cfg.url.trim_end_matches('/');
-        let resp = match self.cfg.engine {
-            TtsKind::None => bail!("TTS disabled"),
-            TtsKind::Piper => {
-                let r = self.http.post(format!("{base}/")).json(&serde_json::json!({ "text": text })).send().await?;
-                if r.status().is_success() {
-                    r
-                } else {
-                    // Older Piper http_server.py accepts the raw text body.
-                    self.http.post(format!("{base}/")).body(text.to_string()).send().await?
-                }
-            }
-            TtsKind::Kokoro => {
-                self.http
-                    .post(format!("{base}/v1/audio/speech"))
-                    .json(&serde_json::json!({
-                        "model": self.cfg.model,
-                        "input": text,
-                        "voice": self.cfg.voice,
-                        "response_format": "wav",
-                    }))
-                    .send()
-                    .await?
-            }
-        };
-        let status = resp.status();
-        if !status.is_success() {
-            bail!("TTS HTTP {status}");
-        }
-        let bytes = resp.bytes().await?;
-        let pcm = Pcm::from_wav(&bytes)?;
-        if pcm.samples.is_empty() {
-            bail!("TTS returned empty audio");
-        }
-        Ok(pcm)
     }
 }
 
@@ -188,12 +136,15 @@ mod tests {
         assert_eq!(m.duration_ms(), 0);
     }
 
-    #[tokio::test]
-    async fn unreachable_sidecar_is_an_error_not_a_panic() {
-        let c = TtsClient::new(TtsConfig { engine: TtsKind::Kokoro, url: "http://127.0.0.1:9".into(), timeout_ms: 500, ..Default::default() }).unwrap();
-        assert!(c.synthesize("hello").await.is_err());
-        assert!(!c.health().await);
-        let off = TtsClient::new(TtsConfig::default()).unwrap();
-        assert!(off.synthesize("x").await.is_err());
+    #[test]
+    fn resample_and_i16_wav() {
+        let pcm = Pcm { samples: (0..48000).map(|i| (i as f32 / 48000.0 * std::f32::consts::TAU * 440.0).sin() * 0.5).collect(), sample_rate: 48000 };
+        let r = pcm.resampled(16000);
+        assert_eq!(r.sample_rate, 16000);
+        assert_eq!(r.samples.len(), 16000);
+        assert!((r.rms() - pcm.rms()).abs() < 0.02);
+        let back = Pcm::from_wav(&r.to_wav_i16().unwrap()).unwrap();
+        assert_eq!(back.samples.len(), 16000);
+        assert!((back.samples[100] - r.samples[100]).abs() < 1e-3);
     }
 }

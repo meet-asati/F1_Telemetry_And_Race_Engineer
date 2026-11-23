@@ -9,11 +9,12 @@
 mod actors;
 mod config;
 mod ingest;
+mod voice;
 mod web;
 
 use actors::*;
 use clap::Parser;
-use comms::ArbConfig;
+use comms::{ArbConfig, RuleConfig};
 use config::{Args, Config};
 use race_state::db::Db;
 use race_state::snapshot::{CommsMode, CommsState, DataSource, TelemetrySnapshot};
@@ -26,8 +27,13 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,sqlx=warn,tower_http=warn".into())).init();
     let args = Args::parse();
     if args.list_audio_devices {
+        println!("Output devices ([audio] device):");
         for d in voice_comms::list_output_devices() {
-            println!("{d}");
+            println!("  {d}");
+        }
+        println!("Input devices ([voice] input_device):");
+        for d in voice_comms::list_input_devices() {
+            println!("  {d}");
         }
         return Ok(());
     }
@@ -52,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let (db_tx, db_rx) = mpsc::unbounded_channel();
     let (comms_tx, comms_rx) = mpsc::channel(256);
     let (audio_tx, audio_rx) = mpsc::channel(32);
+    let (voice_tx, voice_rx) = mpsc::channel(64);
     let (events_tx, _) = broadcast::channel(512);
     let (snapshot_json_tx, snapshot_json_rx) = watch::channel(axum::extract::ws::Utf8Bytes::from_static("{}"));
     let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(TelemetrySnapshot::default()));
@@ -117,6 +124,8 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(
         CommsActor {
             cfg: arb_cfg,
+            rules: RuleConfig { driver_name: Some(cfg.comms.driver_name.trim().to_string()).filter(|n| !n.is_empty()), ..Default::default() },
+            voice: voice_tx,
             initial_mode,
             rx: comms_rx,
             snapshot: snapshot_rx.clone(),
@@ -157,6 +166,42 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("TTS engine is 'none' — radio calls appear as text on the pit wall (set [tts] in config.toml)");
     }
     tokio::spawn(run_tts_health(tts.clone(), player.is_some(), comms_tx.clone(), health_tx.clone()));
+
+    // ---- Voice input (push-to-talk).
+    let mic = if cfg.voice.enabled {
+        let dev = (!cfg.voice.input_device.is_empty()).then(|| cfg.voice.input_device.clone());
+        match tokio::task::spawn_blocking(move || voice_comms::MicCapture::start(dev.as_deref())).await? {
+            Ok(m) => {
+                tracing::info!(
+                    "push-to-talk: mic '{}', wheel button 'UDP Action {}' ({:?})",
+                    m.device_name(),
+                    cfg.voice.ptt_button,
+                    cfg.voice.ptt_mode
+                );
+                health_tx.send_modify(|h| h.mic_device = Some(m.device_name().to_string()));
+                Some(m)
+            }
+            Err(e) => {
+                tracing::warn!("microphone unavailable ({e:#}); typed questions still work");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    tokio::spawn(
+        voice::VoiceActor {
+            cfg: cfg.voice.clone(),
+            rx: voice_rx,
+            mic,
+            stt: ai_sidecar::SttClient::new(cfg.stt.clone())?,
+            llm: ai_sidecar::LlmClient::new(cfg.llm.clone())?,
+            player: player.clone(),
+            snapshot: snapshot_rx.clone(),
+            comms: comms_tx.clone(),
+        }
+        .run(),
+    );
     tokio::spawn(AudioActor { rx: audio_rx, tts, cache, player, comms: comms_tx.clone(), events: events_tx.clone(), db: db_tx.clone() }.run());
 
     // ---- Web.

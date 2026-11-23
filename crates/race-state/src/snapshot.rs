@@ -291,8 +291,18 @@ pub struct CommsState {
     pub override_remaining_ms: u64,
     pub ptt_active: bool,
     pub tts_available: bool,
+    /// Voice input: speech-to-text sidecar reachable.
+    pub stt_available: bool,
+    /// Voice input: LLM reachable (free-form questions).
+    pub llm_available: bool,
+    /// A microphone is open for push-to-talk.
+    pub mic_available: bool,
+    /// The engineer is working on an answer (transcribing / LLM).
+    pub thinking: bool,
     pub speaking: bool,
     pub last_spoken_line: Option<String>,
+    /// The driver's last transcribed radio message.
+    pub last_driver_line: Option<String>,
     pub pending_suggestions: Vec<Suggestion>,
 }
 
@@ -401,6 +411,12 @@ pub enum ClientCommand {
     CommsSetMode { mode: CommsMode, token: Option<String> },
     #[serde(rename = "comms.mute")]
     CommsMute { muted: bool, token: Option<String> },
+    /// Push-to-talk from the UI (hold a button on the driver page / pit wall).
+    #[serde(rename = "ptt.set")]
+    PttSet { active: bool, token: Option<String> },
+    /// A typed question, answered as if the driver had asked it on the radio.
+    #[serde(rename = "driver.ask")]
+    DriverAsk { text: String, token: Option<String> },
     #[serde(rename = "select.car", rename_all = "camelCase")]
     SelectCar { car_index: u8 },
 }
@@ -413,7 +429,9 @@ impl ClientCommand {
             | ClientCommand::SuggestionEdit { token, .. }
             | ClientCommand::SuggestionDismiss { token, .. }
             | ClientCommand::CommsSetMode { token, .. }
-            | ClientCommand::CommsMute { token, .. } => token.as_deref(),
+            | ClientCommand::CommsMute { token, .. }
+            | ClientCommand::PttSet { token, .. }
+            | ClientCommand::DriverAsk { token, .. } => token.as_deref(),
             ClientCommand::SelectCar { .. } => None,
         }
     }
@@ -446,5 +464,9 @@ mod tests {
         assert!(!cmd.is_mutating());
         let cmd: ClientCommand = serde_json::from_str(r#"{"type":"comms.setMode","mode":"copilot","token":"t"}"#).unwrap();
         assert_eq!(cmd.token(), Some("t"));
+        let cmd: ClientCommand = serde_json::from_str(r#"{"type":"ptt.set","active":true}"#).unwrap();
+        assert!(matches!(cmd, ClientCommand::PttSet { active: true, .. }) && cmd.is_mutating());
+        let cmd: ClientCommand = serde_json::from_str(r#"{"type":"driver.ask","text":"gap?"}"#).unwrap();
+        assert!(matches!(cmd, ClientCommand::DriverAsk { .. }));
     }
 }
