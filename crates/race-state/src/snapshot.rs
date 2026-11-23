@@ -33,6 +33,8 @@ pub struct TelemetrySnapshot {
     pub schema_version: u32,
     pub timestamp_ms: u64,
     pub source: DataSource,
+    /// Milliseconds since the last UDP/replay packet (`None` = never).
+    pub last_packet_age_ms: Option<u64>,
     pub game_year: Option<u8>,
     pub session_uid: Option<String>,
     pub session: SessionInfo,

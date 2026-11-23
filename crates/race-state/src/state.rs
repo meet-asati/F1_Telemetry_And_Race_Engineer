@@ -369,13 +369,9 @@ impl RaceState {
                     }
                 }
                 car.stints.push(Stint { compound: visual_compound(st.visual_tyre_compound).to_string(), start_lap: lap, end_lap: None });
+                // Wear points restart with the first lap completed on the new set
+                // (the damage packet may still carry the old tyres' wear here).
                 car.wear_points.clear();
-                if i == self.player {
-                    if let Some(d) = &self.damage {
-                        let progress = self.lap.as_ref().map(|l| l.cars[i].current_lap_num as f32 - 1.0).unwrap_or(0.0);
-                        car.wear_points.push((progress, d.cars[i].tyres_wear));
-                    }
-                }
             }
             car.last_visual = Some(st.visual_tyre_compound);
             car.last_tyre_age = Some(st.tyres_age_laps);
@@ -469,6 +465,11 @@ impl RaceState {
             car.laps.retain(|r| r.lap != completed);
             car.laps.push(row.clone());
             if let Some(w) = row.wear {
+                // A drop in wear means fresh tyres: start a new series.
+                let dropped = car.wear_points.last().map(|(_, prev)| (0..4).any(|k| w[k] + 1.0 < prev[k])).unwrap_or(false);
+                if dropped {
+                    car.wear_points.clear();
+                }
                 car.wear_points.push((completed as f32, w));
             }
             ev.push(StateEvent::Wire(PitWallEvent::LapCompleted { car_index: i as u8, lap: completed, lap_ms }));
@@ -787,7 +788,7 @@ impl RaceState {
         let mut out = [None; 4];
         for (w, slot) in out.iter_mut().enumerate() {
             let series: Vec<(f32, f32)> = pts.iter().map(|(x, ws)| (*x, ws[w])).collect();
-            *slot = metrics::slope(&series);
+            *slot = metrics::slope(&series).filter(|r| *r >= 0.0);
         }
         out
     }

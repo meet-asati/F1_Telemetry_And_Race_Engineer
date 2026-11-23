@@ -103,9 +103,10 @@ impl RuleEngine {
                 out.push(self.alert(key, Priority::P0, AlertLevel::Critical, "flags", &variants, vec![]));
             }
             PitWallEvent::Penalty { car_index, description, time_sec, .. } if *car_index == player => {
-                let txt = match time_sec {
-                    Some(t) => format!("We have a {t} second penalty. {description}."),
-                    None => format!("Penalty: {description}."),
+                let txt = match (time_sec, description.as_str()) {
+                    (Some(t), "Time penalty") => format!("We have a {t} second time penalty."),
+                    (Some(t), d) => format!("Penalty: {}, {t} seconds.", d.to_lowercase()),
+                    (None, d) => format!("We have a {} penalty.", d.to_lowercase()),
                 };
                 out.push(self.alert("penalty", Priority::P0, AlertLevel::Critical, "penalty", &[txt], vec![description.clone()]));
             }
@@ -134,10 +135,10 @@ impl RuleEngine {
             let critical = t.wear_pct.iter().any(|&x| x >= 65.0);
             if critical {
                 let pit = t.projected_pit_lap.map(|l| format!(" Plan to box by lap {l}.")).unwrap_or_default();
-                let v = vec![format!("{corner} tyre is at {w:.0} percent, that's critical.{pit}"), format!("Tyres are going off. {corner} at {w:.0} percent.{pit}")];
+                let v = vec![format!("{} tyre is at {w:.0} percent, that's critical.{pit}", capitalize(corner)), format!("Tyres are going off. {corner} at {w:.0} percent.{pit}")];
                 out.push(self.alert("tyre_wear", Priority::P2, AlertLevel::Critical, "tyres", &v, att));
             } else if w >= 50.0 {
-                let v = vec![format!("{corner} wear is {w:.0} percent. Look after it."), format!("Watch the {corner}, {w:.0} percent worn.")];
+                let v = vec![format!("{} wear is {w:.0} percent. Look after it.", capitalize(corner)), format!("Watch the {corner}, {w:.0} percent worn.")];
                 out.push(self.alert("tyre_wear", Priority::P2, AlertLevel::Watch, "tyres", &v, att));
             }
         }
@@ -220,10 +221,14 @@ impl RuleEngine {
         if s.is_race && s.safety_car_status == "none" && s.phase == "racing" {
             let player = snap.timing.entries.iter().position(|e| e.is_player);
             if let Some(pi) = player {
-                if let Some(gb) = snap.timing.gap_behind_ms {
+                let racing = |e: &TimingEntry| e.pit_status == "none" && e.result_status == "active";
+                let player_racing = racing(&snap.timing.entries[pi]);
+                let behind_racing = snap.timing.entries.get(pi + 1).map(racing).unwrap_or(false);
+                if let Some(gb) = snap.timing.gap_behind_ms.filter(|_| player_racing && behind_racing) {
                     push_hist(&mut self.gap_behind_hist, now, gb);
                     let closing = trend(&self.gap_behind_hist, now, 15_000).map(|d| d < -100).unwrap_or(false);
-                    if gb <= self.cfg.defend_gap_ms && closing {
+                    // Sub-0.1 s "gaps" are side-by-side moments or timing glitches, not a defend call.
+                    if (100..=self.cfg.defend_gap_ms).contains(&gb) && closing {
                         let label = snap.timing.entries.get(pi + 1).map(|e| e.driver_label.clone()).unwrap_or_default();
                         let v = vec![format!("{label} is {} behind and closing. Defend.", fmt_secs(gb)), format!("Car behind within a second, {label}. Cover the inside.")];
                         out.push(self.alert("defend", Priority::P2, AlertLevel::Watch, "gap", &v, vec![format!("Gap behind {}s", fmt_secs(gb))]));
@@ -232,7 +237,7 @@ impl RuleEngine {
                 if let Some(ga) = snap.timing.gap_ahead_ms {
                     push_hist(&mut self.gap_ahead_hist, now, ga);
                     let closing = trend(&self.gap_ahead_hist, now, 30_000).map(|d| d < -250).unwrap_or(false);
-                    if ga > 1000 && ga <= self.cfg.push_gap_max_ms && closing && pi > 0 {
+                    if player_racing && ga > 1000 && ga <= self.cfg.push_gap_max_ms && closing && pi > 0 && racing(&snap.timing.entries[pi - 1]) {
                         let label = snap.timing.entries[pi - 1].driver_label.clone();
                         let v = vec![format!("Gap to {label} is {}, you're catching. Push.", fmt_secs(ga))];
                         out.push(self.alert("push", Priority::P2, AlertLevel::Nominal, "gap", &v, vec![format!("Gap ahead {}s", fmt_secs(ga))]));
@@ -241,6 +246,14 @@ impl RuleEngine {
             }
         }
         out
+    }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
     }
 }
 
@@ -276,9 +289,9 @@ mod tests {
         s.powertrain.fuel_remaining_kg = 30.0;
         s.timing.player_index = 1;
         s.timing.entries = vec![
-            TimingEntry { car_index: 0, position: 1, driver_label: "AAA".into(), ..Default::default() },
-            TimingEntry { car_index: 1, position: 2, driver_label: "PLA".into(), is_player: true, ..Default::default() },
-            TimingEntry { car_index: 2, position: 3, driver_label: "BBB".into(), ..Default::default() },
+            TimingEntry { car_index: 0, position: 1, driver_label: "AAA".into(), pit_status: "none".into(), result_status: "active".into(), ..Default::default() },
+            TimingEntry { car_index: 1, position: 2, driver_label: "PLA".into(), is_player: true, pit_status: "none".into(), result_status: "active".into(), ..Default::default() },
+            TimingEntry { car_index: 2, position: 3, driver_label: "BBB".into(), pit_status: "none".into(), result_status: "active".into(), ..Default::default() },
         ];
         s
     }
@@ -299,7 +312,7 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].key, "tyre_wear");
         assert_eq!(a[0].severity, AlertLevel::Watch);
-        assert!(a[0].text.contains("front-left"));
+        assert!(a[0].text.to_lowercase().contains("front-left"));
         assert_eq!(a[0].attachments, vec!["FL wear 55%"]);
         s.tyres.wear_pct[0] = 70.0;
         s.tyres.alert_level = AlertLevel::Critical;
@@ -336,6 +349,18 @@ mod tests {
             let a = r.evaluate(&s);
             let defend = a.iter().any(|a| a.key == "defend");
             assert_eq!(defend, *gap <= 1000, "gap {gap}");
+        }
+        // A 0.0 s gap (side by side / glitch) and a car behind in the pits never trigger defend.
+        for gap in [0u32, 50] {
+            s.timestamp_ms += 4000;
+            s.timing.gap_behind_ms = Some(gap);
+            assert!(!r.evaluate(&s).iter().any(|a| a.key == "defend"));
+        }
+        s.timing.entries[2].pit_status = "pitting".into();
+        for gap in [700u32, 600] {
+            s.timestamp_ms += 4000;
+            s.timing.gap_behind_ms = Some(gap);
+            assert!(!r.evaluate(&s).iter().any(|a| a.key == "defend"));
         }
     }
 

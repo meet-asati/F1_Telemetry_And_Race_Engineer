@@ -6,7 +6,7 @@ members = [
     "crates/comms",
     "crates/voice-comms",
     "crates/ai-sidecar",
-    # "crates/pitwall-server",
+    "crates/pitwall-server",
     "tools/f1-synth",
 ]
 

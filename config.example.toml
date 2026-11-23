@@ -1,0 +1,61 @@
+# F1 Pit Wall configuration. Copy to config.toml and edit.
+# Every key is optional; defaults are shown.
+
+[udp]
+# In-game: Settings > Telemetry > UDP Telemetry On, UDP IP = this PC, port 20777.
+bind = "0.0.0.0:20777"
+# Only accept packets from these IPs (e.g. a console). Empty = accept all.
+allow_from = []
+
+[http]
+# 0.0.0.0 serves LAN + Tailscale. Use your Tailscale IP (100.x.y.z:8080) to expose only on the tailnet.
+bind = "0.0.0.0:8080"
+# Shared token for radio / approve / mode commands. Empty = no auth.
+token = ""
+ui_dir = "ui/build"
+
+[db]
+path = "data/pitwall.db"
+
+[capture]
+# Record every UDP datagram to captures/ for later replay (--replay <file>).
+record = false
+dir = "captures"
+
+[tts]
+# "none", "piper" or "kokoro".
+#   Piper:  python -m piper.http_server -m en_GB-alan-medium --port 5000
+#   Kokoro: Kokoro-FastAPI on port 8880 (OpenAI-compatible /v1/audio/speech)
+engine = "none"
+url = "http://127.0.0.1:5000"
+voice = "am_michael"
+model = "kokoro"
+timeout_ms = 8000
+
+[audio]
+enabled = true
+# Substring of the output device name (run with --list-audio-devices). Empty = default device.
+device = ""
+cache_dir = "tts-cache"
+
+[comms]
+# "auto" speaks callouts; "copilot" queues proactive callouts for approval on the pit wall.
+mode = "auto"
+override_ms = 10000
+p2_max_age_ms = 20000
+gate_throttle = 0.85
+gate_steer = 0.15
+
+[thresholds]
+tyreWearWatch = 50.0
+tyreWearCritical = 65.0
+pitWearTarget = 70.0
+tyreSurfaceTempWatch = 112
+brakeTempWatch = 1000
+fuelDeltaWatch = -0.2
+fuelDeltaCritical = -0.6
+ersLowPct = 10.0
+componentWearWatch = 70
+aeroDamageWatch = 10
+aeroDamageCritical = 30
+timingLineSpacingM = 50.0
