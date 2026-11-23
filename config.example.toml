@@ -9,7 +9,7 @@ allow_from = []
 
 [http]
 # 0.0.0.0 serves LAN + Tailscale. Use your Tailscale IP (100.x.y.z:8080) to expose only on the tailnet.
-bind = "0.0.0.0:8080"
+bind = "0.0.0.0:8081"
 # Shared token for radio / approve / mode commands. Empty = no auth.
 token = ""
 ui_dir = "ui/build"

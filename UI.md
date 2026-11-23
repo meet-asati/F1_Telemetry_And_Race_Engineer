@@ -59,6 +59,7 @@ The UI models an **F1 pit-wall monitor stand**: a structured, high-contrast comm
   - compact, high-signal summary metrics designed for fast scanning.
 - **Click anywhere on the tile** to open the **Monitor Inspector** for that domain.
 - **Pop-Out Button** on each tile header opens that monitor in a standalone browser window (`/monitor/:id`), which is useful for multi-monitor setups.
+- **Deep link:** `/?inspect=<monitor>` opens a monitor inspector directly (e.g. `/?inspect=tyres`).
   - Pop-outs share the selected car and the layout state with the main window via `BroadcastChannel`.
   - Each window keeps its own WebSocket.
 
@@ -124,7 +125,7 @@ Clicking a monitor opens a dedicated **Inspector View** for that domain, contain
 - **Click-to-Inspect View:**
   - Per-corner wear rate (`%` lost per lap), plus the projected pit lap from the current degradation slope, shown next to the game's pit window (`ideal` / `latest` lap, rejoin position).
   - A thermal graph comparing surface vs. inner carcass temperatures and brake temperatures across recent laps.
-  - Per-corner tyre damage `%`.
+  - Per-corner tyre damage `%` (plus blister `%` on F1 25).
   - Quick radio actions (e.g., *"Cool front tyres"*, *"Box for new set"*).
 
 ### Monitor 4: Power Unit, ERS & Fuel
@@ -203,48 +204,195 @@ The Svelte UI keeps a client-side `PitWallStore` (Svelte 5 runes). It is fed by 
 - **Wheel arrays** are always ordered `[FL, FR, RL, RR]`. The server reorders them from the game's `RL, RR, FL, FR`.
 - **`null`** means unavailable. Restricted rival data is flagged with `telemetryRestricted: true`, and its fields are `null`.
 
-### 5.1 Server → Client Messages
+### 5.1 Messages, Snapshot and Commands
+
+The canonical contract is `ui/src/lib/types.ts`, mirrored in Rust by `crates/race-state/src/snapshot.rs` (serde, camelCase). Notes:
+
+- `lastPacketAgeMs` drives the stale/“Waiting for game” states (`null` = no packet yet).
+- `session.phase` (`grid` | `start` | `racing` | `finished`) feeds the comms speech-free windows.
+- `tyres.blistersPct` is only present for F1 25, which is the first format to send blister data.
+- If the daemon has a shared token configured, every mutating command must include `token`. `select.car` never needs one.
 
 ```ts
-export type AlertLevel = "nominal" | "watch" | "critical";
-export type Wheels<T> = [T, T, T, T]; // FL, FR, RL, RR
-export type DataSource = "live" | "replay" | "synthetic" | "none";
+// Wire contract with pitwall-server (UI.md §5). Mirrors crates/race-state/src/snapshot.rs.
+// Times are integer ms, temps °C, percentages 0–100, wheel arrays [FL, FR, RL, RR].
 
-export type ServerMessage =
-  | { type: "hello"; schemaVersion: number; serverVersion: string; authRequired: boolean }
-  | { type: "snapshot"; seq: number; data: TelemetrySnapshot }
-  | { type: "event"; event: PitWallEvent };
+export type AlertLevel = 'nominal' | 'watch' | 'critical';
+export type Wheels<T> = [T, T, T, T];
+export type DataSource = 'live' | 'replay' | 'synthetic' | 'none';
+export type Priority = 'P0' | 'P1' | 'P2';
+export type CommsMode = 'auto' | 'copilot';
+
+export interface ForecastSample {
+  timeOffsetMin: number;
+  weather: string;
+  rainPct: number;
+  airTempC: number;
+  trackTempC: number;
+}
+
+export interface SessionInfo {
+  trackId: number;
+  trackName: string;
+  trackLengthM: number;
+  sessionType: string;
+  isRace: boolean;
+  lap: number;
+  totalLaps: number;
+  timeLeftMs: number;
+  weather: string;
+  airTempC: number;
+  trackTempC: number;
+  forecastAccuracy: 'perfect' | 'approximate';
+  weatherForecast: ForecastSample[];
+  marshalZones: { startFraction: number; flag: 'none' | 'green' | 'blue' | 'yellow' | 'red' }[];
+  safetyCarStatus: 'none' | 'full' | 'virtual' | 'formation';
+  pitWindow: { idealLap: number; latestLap: number; rejoinPosition: number } | null;
+  paused: boolean;
+  phase: 'grid' | 'start' | 'racing' | 'finished' | '';
+}
+
+export interface Stint {
+  compound: string;
+  startLap: number;
+  endLap: number | null;
+}
+
+export interface TimingEntry {
+  carIndex: number;
+  position: number;
+  driverLabel: string;
+  driverName: string;
+  raceNumber: number;
+  teamId: number;
+  isPlayer: boolean;
+  lap: number;
+  gapToLeaderMs: number | null;
+  gapToAheadMs: number | null;
+  lastLapMs: number | null;
+  bestLapMs: number | null;
+  sectorsMs: [number | null, number | null, number | null];
+  compound: string | null;
+  tyreAgeLaps: number | null;
+  pitStops: number;
+  pitStatus: 'none' | 'pitting' | 'inPitArea';
+  penaltiesMs: number;
+  warnings: number;
+  driverStatus: string;
+  resultStatus: string;
+  telemetryRestricted: boolean;
+  stints: Stint[];
+}
+
+export interface TrackCar {
+  carIndex: number;
+  x: number;
+  z: number;
+  lapDistancePct: number;
+  speedKph: number;
+  gear: number;
+  throttlePct: number;
+  brakePct: number;
+  steer: number;
+  ersDeployMode: string | null;
+  isPlayer: boolean;
+  drsActive: boolean;
+  inPit: boolean;
+}
+
+export interface Tyres {
+  compound: string;
+  actualCompound: string;
+  ageLaps: number;
+  wearPct: Wheels<number>;
+  wearRatePerLap: Wheels<number | null>;
+  damagePct: Wheels<number>;
+  blistersPct: Wheels<number> | null;
+  surfaceTempC: Wheels<number>;
+  innerTempC: Wheels<number>;
+  brakeTempC: Wheels<number>;
+  pressurePsi: Wheels<number>;
+  projectedPitLap: number | null;
+  alertLevel: AlertLevel;
+  alertReason: string | null;
+}
+
+export interface Powertrain {
+  fuelRemainingLapsDelta: number;
+  fuelRemainingKg: number;
+  fuelBurnPerLapKg: number | null;
+  fuelRequiredPerLapKg: number | null;
+  ersStorePct: number;
+  ersDeployMode: string;
+  ersHarvestedThisLapKJ: number;
+  ersDeployedThisLapKJ: number;
+  wearPct: { ice: number; mguH: number; mguK: number; es: number; ce: number; tc: number; gearbox: number };
+  engineBlown: boolean;
+  engineSeized: boolean;
+  ersFault: boolean;
+  alertLevel: AlertLevel;
+  alertReason: string | null;
+}
+
+export interface Setup {
+  frontWing: number;
+  rearWing: number;
+  onThrottle: number;
+  offThrottle: number;
+  brakeBias: number;
+  brakePressure: number;
+  frontSuspension: number;
+  rearSuspension: number;
+  frontAntiRollBar: number;
+  rearAntiRollBar: number;
+  frontRideHeight: number;
+  rearRideHeight: number;
+}
+
+export interface Damage {
+  frontLeftWingPct: number;
+  frontRightWingPct: number;
+  rearWingPct: number;
+  floorPct: number;
+  diffuserPct: number;
+  sidepodPct: number;
+  brakeDamagePct: Wheels<number>;
+  drsFault: boolean;
+  setup: Setup | null;
+  alertLevel: AlertLevel;
+  alertReason: string | null;
+}
+
+export interface Suggestion {
+  id: string;
+  priority: Priority;
+  category: string;
+  message: string;
+  createdAtMs: number;
+  expiresAtMs: number;
+  contextAttachments: string[];
+}
+
+export interface CommsState {
+  mode: CommsMode;
+  muted: boolean;
+  friendOverrideActive: boolean;
+  overrideRemainingMs: number;
+  pttActive: boolean;
+  ttsAvailable: boolean;
+  speaking: boolean;
+  lastSpokenLine: string | null;
+  pendingSuggestions: Suggestion[];
+}
 
 export interface TelemetrySnapshot {
   schemaVersion: number;
   timestampMs: number;
   source: DataSource;
-  gameYear: number | null;           // 22 | 23 | 24 | 25
+  lastPacketAgeMs: number | null;
+  gameYear: number | null;
   sessionUid: string | null;
-
-  session: {
-    trackId: number;
-    trackName: string;
-    sessionType: string;             // "P1" | "Q3" | "Race" | "TimeTrial" ...
-    lap: number;
-    totalLaps: number;
-    timeLeftMs: number;
-    weather: string;                 // "clear" | "lightCloud" | "overcast" | "lightRain" | "heavyRain" | "storm"
-    airTempC: number;
-    trackTempC: number;
-    forecastAccuracy: "perfect" | "approximate";
-    weatherForecast: Array<{
-      timeOffsetMin: number;
-      weather: string;
-      rainPct: number;
-      airTempC: number;
-      trackTempC: number;
-    }>;
-    marshalZones: Array<{ startFraction: number; flag: "none" | "green" | "blue" | "yellow" | "red" }>;
-    safetyCarStatus: "none" | "full" | "virtual" | "formation";
-    pitWindow: { idealLap: number; latestLap: number; rejoinPosition: number } | null;
-  };
-
+  session: SessionInfo;
   timing: {
     playerIndex: number;
     position: number;
@@ -252,144 +400,87 @@ export interface TelemetrySnapshot {
     gapBehindMs: number | null;
     lastLapMs: number | null;
     bestLapMs: number | null;
-    entries: Array<{
-      carIndex: number;
-      position: number;
-      driverLabel: string;           // 3-letter code or name
-      raceNumber: number;
-      teamId: number;
-      isPlayer: boolean;
-      gapToLeaderMs: number | null;
-      gapToAheadMs: number | null;
-      lastLapMs: number | null;
-      bestLapMs: number | null;
-      sectorsMs: [number | null, number | null, number | null]; // current/last lap S1, S2, S3
-      compound: string;              // visual: "S" | "M" | "H" | "I" | "W"
-      tyreAgeLaps: number | null;
-      pitStops: number;
-      pitStatus: "none" | "pitting" | "inPitArea";
-      penaltiesMs: number;
-      warnings: number;
-      driverStatus: "garage" | "flyingLap" | "inLap" | "outLap" | "onTrack";
-      resultStatus: "active" | "finished" | "dnf" | "dsq" | "retired" | "notClassified" | "inactive";
-      telemetryRestricted: boolean;
-      stints: Array<{ compound: string; startLap: number; endLap: number | null }>;
-    }>;
+    entries: TimingEntry[];
   };
-
-  track: {
-    cars: Array<{
-      carIndex: number;
-      x: number;
-      z: number;
-      lapDistancePct: number;
-      speedKph: number;
-      gear: number;
-      throttlePct: number;
-      brakePct: number;
-      ersDeployMode: string | null;
-      isPlayer: boolean;
-      drsActive: boolean;
-    }>;
-  };
-
-  tyres: {                           // player car
-    compound: string;
-    actualCompound: string;          // "C1".."C5" | "Inter" | "Wet"
-    ageLaps: number;
-    wearPct: Wheels<number>;
-    wearRatePerLap: Wheels<number | null>;
-    damagePct: Wheels<number>;
-    surfaceTempC: Wheels<number>;
-    innerTempC: Wheels<number>;
-    brakeTempC: Wheels<number>;
-    projectedPitLap: number | null;
-    alertLevel: AlertLevel;
-    alertReason: string | null;
-  };
-
-  powertrain: {                      // player car
-    fuelRemainingLapsDelta: number;  // MFD value
-    fuelRemainingKg: number;
-    fuelBurnPerLapKg: number | null;
-    fuelRequiredPerLapKg: number | null;
-    ersStorePct: number;
-    ersDeployMode: string;
-    ersHarvestedThisLapKJ: number;
-    ersDeployedThisLapKJ: number;
-    wearPct: { ice: number; mguH: number; mguK: number; es: number; ce: number; tc: number; gearbox: number };
-    engineBlown: boolean;
-    engineSeized: boolean;
-    ersFault: boolean;
-    alertLevel: AlertLevel;
-    alertReason: string | null;
-  };
-
-  damage: {                          // player car
-    frontLeftWingPct: number;
-    frontRightWingPct: number;
-    rearWingPct: number;
-    floorPct: number;
-    diffuserPct: number;
-    sidepodPct: number;
-    brakeDamagePct: Wheels<number>;
-    drsFault: boolean;
-    alertLevel: AlertLevel;
-    alertReason: string | null;
-  };
-
-  comms: {
-    mode: "auto" | "copilot";
-    muted: boolean;
-    friendOverrideActive: boolean;
-    overrideRemainingMs: number;
-    pttActive: boolean;
-    ttsAvailable: boolean;
-    lastSpokenLine: string | null;
-    pendingSuggestions: Array<{
-      id: string;
-      priority: "P0" | "P1" | "P2";
-      category: string;              // "tyres" | "fuel" | "weather" | "gap" | "damage" | ...
-      message: string;
-      createdAtMs: number;
-      expiresAtMs: number;
-      contextAttachments: string[];  // e.g. ["FL wear 68%", "Fuel -0.7 laps"]
-    }>;
-  };
+  track: { outlineAvailable: boolean; cars: TrackCar[] };
+  tyres: Tyres;
+  powertrain: Powertrain;
+  damage: Damage;
+  comms: CommsState;
 }
 
+export type RadioSource = 'rule' | 'llm' | 'friend' | 'driver';
+export type RadioOutcome = 'spoken' | 'queued' | 'dismissed' | 'expired' | 'textOnly' | 'suppressed';
+export type FlagStatus = 'sc' | 'vsc' | 'scEnding' | 'vscEnding' | 'red' | 'green' | 'chequered';
+
+export type RadioEvent = {
+  kind: 'radio';
+  atMs: number;
+  source: RadioSource;
+  priority: Priority;
+  text: string;
+  outcome: RadioOutcome;
+  attachments: string[];
+};
+
 export type PitWallEvent =
-  | { kind: "radio"; atMs: number; source: "rule" | "llm" | "friend" | "driver"; priority: "P0" | "P1" | "P2"; text: string; outcome: "spoken" | "queued" | "dismissed" | "expired" | "textOnly" }
-  | { kind: "flag"; atMs: number; status: "sc" | "vsc" | "vscEnding" | "scEnding" | "red" | "green"; }
-  | { kind: "penalty"; atMs: number; carIndex: number; description: string; timeSec: number | null }
-  | { kind: "suggestion.added"; suggestionId: string }
-  | { kind: "suggestion.resolved"; suggestionId: string; outcome: "approved" | "edited" | "dismissed" | "expired" }
-  | { kind: "session.reset"; sessionUid: string }
-  | { kind: "flashback"; atMs: number; toLap: number }
-  | { kind: "lap.completed"; carIndex: number; lap: number; lapMs: number };
-```
+  | RadioEvent
+  | { kind: 'flag'; atMs: number; status: FlagStatus }
+  | { kind: 'penalty'; atMs: number; carIndex: number; driverLabel: string; description: string; timeSec: number | null; lap: number }
+  | { kind: 'suggestion.added'; suggestionId: string }
+  | { kind: 'suggestion.resolved'; suggestionId: string; outcome: 'approved' | 'edited' | 'dismissed' | 'expired' }
+  | { kind: 'session.reset'; sessionUid: string }
+  | { kind: 'flashback'; atMs: number; toLap: number }
+  | { kind: 'lap.completed'; carIndex: number; lap: number; lapMs: number };
 
-### 5.2 Client → Server Commands
+export type ServerMessage =
+  | { type: 'hello'; schemaVersion: number; serverVersion: string; authRequired: boolean }
+  | { type: 'snapshot'; seq: number; data: TelemetrySnapshot }
+  | { type: 'event'; event: PitWallEvent }
+  | { type: 'error'; message: string };
 
-If the daemon has a shared token configured, every mutating command must include `token`.
-
-```ts
 export type ClientCommand =
-  | { type: "radio.send"; text: string; attachments?: string[]; token?: string }
-  | { type: "suggestion.approve"; id: string; token?: string }
-  | { type: "suggestion.edit"; id: string; text: string; token?: string }
-  | { type: "suggestion.dismiss"; id: string; token?: string }
-  | { type: "comms.setMode"; mode: "auto" | "copilot"; token?: string }
-  | { type: "comms.mute"; muted: boolean; token?: string }
-  | { type: "select.car"; carIndex: number };   // UI-local hint, no token required
+  | { type: 'radio.send'; text: string; attachments?: string[]; token?: string }
+  | { type: 'suggestion.approve'; id: string; token?: string }
+  | { type: 'suggestion.edit'; id: string; text: string; token?: string }
+  | { type: 'suggestion.dismiss'; id: string; token?: string }
+  | { type: 'comms.setMode'; mode: CommsMode; token?: string }
+  | { type: 'comms.mute'; muted: boolean; token?: string }
+  | { type: 'select.car'; carIndex: number };
+
+/** Row from GET /api/sessions/:id/laps */
+export interface LapRow {
+  carIndex: number;
+  driver: string;
+  lap: number;
+  lapMs: number;
+  s1Ms: number | null;
+  s2Ms: number | null;
+  s3Ms: number | null;
+  compound: string | null;
+  tyreAge: number | null;
+  wear: Wheels<number> | null;
+  fuelKg: number | null;
+  ersHarvestJ: number | null;
+  ersDeployJ: number | null;
+  valid: boolean;
+  position: number;
+  sessionTime: number;
+}
+
+export type MonitorId = 'timing' | 'track' | 'tyres' | 'power' | 'damage' | 'weather' | 'comms';
 ```
 
 ### 5.3 REST Endpoints
 
 | Method | Path | Purpose |
 | :--- | :--- | :--- |
-| `GET` | `/api/health` | Daemon, UDP and sidecar status. |
+| `GET` | `/api/health` | Daemon, UDP, TTS, audio and DB status, plus the current session id. |
+| `GET` | `/api/snapshot` | The latest telemetry snapshot (same shape as the WebSocket `data`). |
 | `GET` | `/api/sessions` | Recorded sessions (most recent first). |
+| `GET` | `/api/sessions/current` | `{ id }` of the live session. |
 | `GET` | `/api/sessions/:id/laps` | Per-car lap rows for inspector history charts. |
+| `GET` | `/api/sessions/:id/radio` | Radio audit log for the session. |
 | `GET` | `/api/track-outline/:trackId` | Cached circuit polyline (`404` until a clean lap is recorded). |
-| `POST` | `/api/radio` | Send a manual radio message (token-protected when configured). |
+| `DELETE` | `/api/track-outline/:trackId` | Forget a cached outline (token-protected). |
+| `POST` | `/api/radio` | Send a manual radio message (token in body or `x-pitwall-token` header). |

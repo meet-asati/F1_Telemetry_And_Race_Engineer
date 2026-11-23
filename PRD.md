@@ -114,7 +114,7 @@ This project builds a **Rust-backed AI Race Engineer and Duo Pit-Wall system**:
   - marshal zones (`m_marshalZones[]`);
   - Safety Car status;
   - for all 22 cars: positions, gaps, lap/sector times, and penalties and warnings;
-  - tyre compound (actual + visual), age, wear, surface/inner temps and tyre damage;
+  - tyre compound (actual + visual), age, wear, surface/inner temps and tyre damage (plus blisters on F1 25, the first format to send them);
   - brake temps and brake damage;
   - fuel remaining and the MFD fuel delta (`m_fuelRemainingLaps`);
   - ERS energy, deploy mode, and harvest/deploy this lap;
