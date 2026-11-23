@@ -331,7 +331,8 @@ impl CommsActor {
                         throttle: player.map(|c| c.throttle_pct as f32 / 100.0).unwrap_or(0.0),
                         steer: player.map(|c| c.steer).unwrap_or(0.0),
                         in_pit: player.map(|c| c.in_pit).unwrap_or(false),
-                        phase: if fresh { snap.session.phase.clone() } else { "racing".into() },
+                        // Paused game or lost feed: hold routine (P2) calls; P0/P1 still play.
+                        phase: if fresh && !snap.session.paused { snap.session.phase.clone() } else { "paused".into() },
                     };
                     if let Some(u) = arb.tick(now, &ctx) {
                         if self.audio.try_send(u.clone()).is_err() {
@@ -348,7 +349,7 @@ impl CommsActor {
                     st.thinking = thinking;
                     st.last_driver_line = last_driver_line.clone();
                     self.state_out.send_if_modified(|cur| {
-                        let changed = serde_json::to_string(cur).ok() != serde_json::to_string(&st).ok();
+                        let changed = *cur != st;
                         if changed { *cur = st; }
                         changed
                     });

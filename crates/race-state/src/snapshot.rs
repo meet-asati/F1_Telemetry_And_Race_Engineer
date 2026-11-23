@@ -270,7 +270,7 @@ pub enum Priority {
     P2,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Suggestion {
     pub id: String,
@@ -282,7 +282,7 @@ pub struct Suggestion {
     pub context_attachments: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CommsState {
     pub mode: CommsMode,
