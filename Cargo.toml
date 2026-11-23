@@ -7,7 +7,7 @@ members = [
     # "crates/voice-comms",
     # "crates/ai-sidecar",
     # "crates/pitwall-server",
-    # "tools/f1-synth",
+    "tools/f1-synth",
 ]
 
 [workspace.package]

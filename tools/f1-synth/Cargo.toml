@@ -1,0 +1,11 @@
+[package]
+name = "f1-synth"
+description = "Synthetic 22-car F1 race generator that emits real UDP telemetry in any supported format"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+f1-udp.workspace = true
+clap.workspace = true
+anyhow.workspace = true
