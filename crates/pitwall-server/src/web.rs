@@ -32,6 +32,7 @@ pub fn router(state: AppState, ui_dir: PathBuf) -> Router {
         .route("/api/sessions/current", get(current_session))
         .route("/api/sessions/{id}/laps", get(session_laps))
         .route("/api/sessions/{id}/radio", get(session_radio))
+        .route("/api/sessions/{id}/debrief", get(session_debrief))
         .route("/api/track-outline/{track_id}", get(track_outline).delete(delete_outline))
         .route("/api/radio", post(post_radio))
         .route("/api/audio/inputs", get(audio_inputs))
@@ -153,6 +154,43 @@ async fn session_laps(State(state): State<AppState>, Path(id): Path<i64>) -> Res
     match db.laps(id).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct DebriefQuery {
+    /// Whose debrief (defaults to the player's car).
+    car: Option<u8>,
+}
+
+/// Race-like sessions get a result and race pace; others are pace-only.
+pub fn is_race_type(session_type: &str) -> bool {
+    let t = session_type.to_lowercase();
+    t.contains("race") || t.contains("sprint")
+}
+
+async fn session_debrief(State(state): State<AppState>, Path(id): Path<i64>, axum::extract::Query(q): axum::extract::Query<DebriefQuery>) -> Response {
+    let db = match db_or_503(&state) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    let session = match db.session(id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such session").into_response(),
+        Err(e) => return internal(e),
+    };
+    let laps = match db.laps(id).await {
+        Ok(v) => v,
+        Err(e) => return internal(e),
+    };
+    // Old sessions don't record the player's car: fall back to the first car with laps.
+    let car = q.car.or(session.player_car.map(|c| c as u8)).or_else(|| laps.iter().map(|l| l.car_index).min());
+    let Some(car) = car else {
+        return (StatusCode::NOT_FOUND, "no laps recorded for this session").into_response();
+    };
+    match race_state::debrief::build(&laps, car, is_race_type(&session.session_type), session.total_laps as u8) {
+        Some(d) => Json(serde_json::json!({ "session": session, "playerKnown": session.player_car.is_some(), "debrief": d })).into_response(),
+        None => (StatusCode::NOT_FOUND, "no laps for that car").into_response(),
     }
 }
 

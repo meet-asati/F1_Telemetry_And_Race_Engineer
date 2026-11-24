@@ -63,6 +63,10 @@
     {/if}
 
     <button class="ghost" onclick={() => (showSettings = !showSettings)} aria-label="Settings" title="Settings"><Icon name="settings" /></button>
+    <a class="ghost link" href="/" title="Live pit wall">Stand</a>
+    <a class="ghost link" class:ready={sess?.phase === 'finished'} href="/debrief" title="Post-session debrief">
+      {sess?.phase === 'finished' ? 'Debrief ready' : 'Debrief'}
+    </a>
     <a class="ghost link" href="/driver" target="_blank" title="Open the driver view">Driver view <Icon name="popout" size={12} /></a>
   </div>
 </header>
@@ -237,6 +241,14 @@
   }
   .link:hover {
     color: var(--text);
+  }
+  .link.ready {
+    color: #001a12;
+    background: var(--data);
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-weight: 700;
+    animation: blink 1.4s steps(2) infinite;
   }
   .toast {
     position: fixed;

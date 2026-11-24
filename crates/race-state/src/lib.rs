@@ -4,8 +4,10 @@
 //!   [`state::StateEvent`]s (laps, flags, penalties, flashbacks, outlines).
 //! * [`snapshot`] holds the JSON wire contract shared with the UI (`UI.md` §5).
 //! * [`db::Db`] persists sessions, laps, radio events and track outlines.
+//! * [`debrief`] builds the post-session debrief from lap rows.
 
 pub mod db;
+pub mod debrief;
 pub mod metrics;
 pub mod snapshot;
 pub mod state;

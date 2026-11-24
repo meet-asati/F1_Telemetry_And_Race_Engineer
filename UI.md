@@ -83,6 +83,20 @@ Clicking a monitor opens it as a large **in-window popup monitor** (same bezel a
   - the Safety Car / VSC banner.
 - Controls: a large **Hold to talk** button (touch-friendly) and mute. (An in-game overlay on top of a fullscreen game isn't practical, so it is out of scope.)
 
+### 2.6 Debrief (`/debrief?session=&car=`)
+
+- Reached from the top bar. The link turns into a pulsing **Debrief ready** chip when the session phase is `finished`.
+- It uses the same monitor bezels as the stand, laid out in a grid:
+  - result hero with KPI tiles;
+  - engineer's debrief (ranked insights);
+  - lap-times chart (you, the winner, and the car that finished ahead);
+  - position-by-lap chart;
+  - stints table with wear and fuel charts;
+  - sectors table with a per-lap strip (clean / in / out / slow / invalid);
+  - field-pace table (click a row to switch driver);
+  - radio log.
+- Session and driver selectors at the top. Sessions recorded before the player's car was stored show a hint to pick yourself.
+
 ### 2.5 Rendering Budget
 
 - Tiles re-render on each `15Hz` snapshot.

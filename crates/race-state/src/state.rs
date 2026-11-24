@@ -54,6 +54,8 @@ pub struct SessionRow {
     pub track_name: String,
     pub session_type: String,
     pub total_laps: u8,
+    /// The player's car index.
+    pub player_car: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -370,6 +372,7 @@ impl RaceState {
                 track_name: track_name(s.track_id).to_string(),
                 session_type: session_type_name(fmt, s.session_type).to_string(),
                 total_laps: s.total_laps,
+                player_car: self.player as u8,
             }));
         }
     }

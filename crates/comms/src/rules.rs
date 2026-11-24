@@ -109,6 +109,10 @@ pub struct RuleEngine {
     last_position: Option<u8>,
     last_best_ms: Option<u32>,
     last_pit_stops: Option<u8>,
+    /// A stop happened; waiting for the new compound to show up before the
+    /// "good stop" call: (stop count, compound before, timestamp).
+    pending_stop: Option<(u8, String, u64)>,
+    last_compound: String,
     session_uid: Option<String>,
 }
 
@@ -132,6 +136,8 @@ impl RuleEngine {
             last_position: None,
             last_best_ms: None,
             last_pit_stops: None,
+            pending_stop: None,
+            last_compound: String::new(),
             session_uid: None,
         }
     }
@@ -227,6 +233,19 @@ impl RuleEngine {
         out
     }
 
+    /// The engineer's short spoken wrap-up after the flag (the position was
+    /// already given by the chequered-flag call, so it is skipped here).
+    pub fn debrief_lines(&self, d: &race_state::debrief::Debrief) -> Option<String> {
+        let points: Vec<&str> = d.insights.iter().filter(|i| i.kind != "result").map(|i| i.text.as_str()).collect();
+        if points.is_empty() {
+            return None;
+        }
+        Some(match self.cfg.persona {
+            Persona::Blunt => points.iter().take(2).copied().collect::<Vec<_>>().join(" "),
+            Persona::Classic => format!("Quick debrief. {} The full breakdown is on the pit wall.", points.iter().take(3).copied().collect::<Vec<_>>().join(" ")),
+        })
+    }
+
     /// The engineer's line as the driver takes the flag.
     fn finish_line(&self, snap: &TelemetrySnapshot) -> String {
         let pos = snap.timing.position;
@@ -262,6 +281,7 @@ impl RuleEngine {
             self.last_position = None;
             self.last_best_ms = None;
             self.last_pit_stops = None;
+            self.pending_stop = None;
             self.gap_ahead_hist.clear();
             self.gap_behind_hist.clear();
         }
@@ -504,18 +524,27 @@ impl RuleEngine {
             self.last_position = Some(pos);
         }
 
-        // Pit stop completed.
+        // Pit stop completed. The stop counter ticks before the game reports
+        // the new tyres, so wait for the compound to change (or 6 s).
         if let Some(prev) = self.last_pit_stops {
             if me.pit_stops > prev && s.is_race {
+                self.pending_stop = Some((me.pit_stops, self.last_compound.clone(), snap.timestamp_ms));
+            }
+        }
+        let fitted_now = self.pending_stop.as_ref().is_some_and(|(_, before, at)| snap.tyres.compound != *before || snap.timestamp_ms.saturating_sub(*at) >= 6000);
+        if fitted_now {
+            let (stops, _, _) = self.pending_stop.take().expect("checked");
+            {
                 let fitted = capitalize(compound_name(&snap.tyres.compound));
                 let v = self.st(
                     vec![format!("Good stop. {fitted} fitted, get some temperature in them."), format!("Good stop, good stop. {fitted}. Out lap, build the temps.")],
                     vec![format!("Good stop. {fitted}. Bring them in.")],
                 );
-                out.push(self.alert("pit_done", Priority::P1, AlertLevel::Nominal, "strategy", &v, vec![format!("Stop {}", me.pit_stops)]));
+                out.push(self.alert("pit_done", Priority::P1, AlertLevel::Nominal, "strategy", &v, vec![format!("Stop {stops}")]));
             }
         }
         self.last_pit_stops = Some(me.pit_stops);
+        self.last_compound = snap.tyres.compound.clone();
 
         // Laps to go.
         if s.is_race && racing && s.total_laps >= 5 && s.lap > 0 {
@@ -730,5 +759,24 @@ mod tests {
         s.timing.position = 1;
         let fin = r.on_event(&PitWallEvent::Flag { at_ms: 0, status: FlagStatus::Chequered }, &s);
         assert_eq!(fin[0].text, "Max, P1. Race won. Good job.");
+    }
+
+    #[test]
+    fn good_stop_waits_for_the_new_compound() {
+        let mut r = classic();
+        let mut s = base_snapshot();
+        s.tyres.compound = "S".into();
+        s.timestamp_ms = 1000;
+        r.evaluate(&s);
+        // Stop counted, but the game still reports the old softs.
+        s.timing.entries[1].pit_stops = 1;
+        s.timestamp_ms = 2000;
+        assert!(!r.evaluate(&s).iter().any(|a| a.key == "pit_done"), "too early: still on softs");
+        // New mediums appear.
+        s.tyres.compound = "M".into();
+        s.timestamp_ms = 2500;
+        let a = r.evaluate(&s);
+        let stop = a.iter().find(|a| a.key == "pit_done").expect("good stop call");
+        assert!(stop.text.contains("Mediums"), "{}", stop.text);
     }
 }

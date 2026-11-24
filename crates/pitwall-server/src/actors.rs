@@ -87,6 +87,8 @@ pub enum CommsCmd {
     Thinking(bool),
     VoiceStatus(VoiceStatus),
     MicLevel(f32),
+    /// Race over: the engineer's spoken wrap-up.
+    Debrief(Box<race_state::debrief::Debrief>),
     MicBlocked(bool),
     MicDevice(Option<String>),
     /// A wheel "UDP Action N" button was pressed (diagnostics).
@@ -124,6 +126,9 @@ impl StateActor {
                     let Some(p) = p else { break };
                     have_packets = true;
                     for ev in state.ingest(&p, now_ms()) {
+                        if matches!(ev, StateEvent::RaceFinished) {
+                            self.debrief(&state, now_ms());
+                        }
                         self.handle(ev);
                     }
                 }
@@ -155,6 +160,20 @@ impl StateActor {
                     }
                 }
             }
+        }
+    }
+
+    /// Build the player's debrief from the race just finished and hand it to comms.
+    fn debrief(&self, state: &RaceState, now: u64) {
+        let laps: Vec<LapRow> = (0..22).flat_map(|c| state.laps(c).to_vec()).collect();
+        let snap = state.snapshot(now);
+        let player = state.player_index() as u8;
+        match race_state::debrief::build(&laps, player, snap.session.is_race, snap.session.total_laps) {
+            Some(d) => {
+                tracing::info!("debrief: {}", d.insights.iter().map(|i| i.text.as_str()).collect::<Vec<_>>().join(" "));
+                let _ = self.comms.try_send(CommsCmd::Debrief(Box::new(d)));
+            }
+            None => tracing::info!("race finished, but no laps for a debrief"),
         }
     }
 
@@ -327,6 +346,11 @@ impl CommsActor {
                         CommsCmd::Thinking(v) => thinking = v,
                         CommsCmd::VoiceStatus(v) => voice_status = v,
                         CommsCmd::MicLevel(v) => mic_level = v,
+                        CommsCmd::Debrief(d) => {
+                            if let Some(text) = rules.debrief_lines(&d) {
+                                arb.driver_answer(text, RadioSource::Rule, now);
+                            }
+                        }
                         CommsCmd::MicBlocked(v) => mic_blocked = v,
                         CommsCmd::MicDevice(d) => mic_device = d,
                         CommsCmd::UdpAction(n) => last_udp_action = Some(n),

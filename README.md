@@ -14,7 +14,7 @@ Specs: [PRD.md](PRD.md) · [UI.md](UI.md)
 | M4 `comms` + local radio — rule engine, arbitrator, TTS → radio FX → speakers | ✅ |
 | M5 Voice input: push-to-talk, whisper, telemetry-first answers + LLM, engineer persona | ✅ |
 | M6 Discord | planned |
-| M7 Debrief | planned |
+| M7 Debrief: post-session page + spoken wrap-up | ✅ |
 
 ## Quick start
 
@@ -144,6 +144,20 @@ Check it is all up in the AI Engineer monitor: **MIC**, **SPEECH-TO-TEXT**, **LL
 | The engineer says "the speech server is down" | whisper.cpp isn't running and couldn't be auto-started; see step 2. |
 
 The server log also prints every wheel button press and each push-to-talk clip (`push-to-talk released: … ms held, level …`).
+
+## Debrief
+
+After the chequered flag the engineer gives a two-line wrap-up on the radio, and **Debrief ready** lights up in the top bar. Open `/debrief` for any recorded session:
+
+- **Result:** finishing position, places gained or lost since lap 1, best lap and race pace with their rank in the field, ideal lap (sum of your best sectors), consistency, and fuel at the flag.
+- **Engineer's debrief:** the most important observations first. For example: pace rank, which sector is costing you time, tyres that fell away, time left on the table.
+- **Charts:** your lap times against the winner and the car that finished ahead (pit and safety-car laps are clipped out), and your position by lap.
+- **Stints:** compound, average pace, degradation per lap and wear per lap, plus wear and fuel charts.
+- **Sectors:** your best sectors against the field's best, plus every lap tagged clean, in-lap, out-lap, slow or invalid.
+- **Field pace:** every driver's best lap, race pace and stops. Click a driver to open their debrief.
+- **Radio log:** everything said in the session.
+
+The data comes from `GET /api/sessions/{id}/debrief?car=N` (defaults to your car).
 
 ## Friend on the pit wall (Tailscale)
 

@@ -24,6 +24,8 @@ pub struct SessionListItem {
     pub total_laps: i64,
     pub started_at: String,
     pub lap_count: i64,
+    /// The player's car (unknown for sessions recorded before it was stored).
+    pub player_car: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,8 +78,8 @@ impl Db {
             return Ok(row.get(0));
         }
         let id = sqlx::query(
-            "INSERT INTO sessions (session_uid, game_year, track_id, track_name, session_type, total_laps, started_at)
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+            "INSERT INTO sessions (session_uid, game_year, track_id, track_name, session_type, total_laps, started_at, player_car)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)",
         )
         .bind(&s.session_uid)
         .bind(s.game_year as i64)
@@ -85,6 +87,7 @@ impl Db {
         .bind(&s.track_name)
         .bind(&s.session_type)
         .bind(s.total_laps as i64)
+        .bind(s.player_car as i64)
         .execute(&self.pool)
         .await?
         .last_insert_rowid();
@@ -173,14 +176,24 @@ impl Db {
     }
 
     pub async fn list_sessions(&self, limit: i64) -> anyhow::Result<Vec<SessionListItem>> {
-        let rows = sqlx::query(
-            "SELECT s.id, s.session_uid, s.game_year, s.track_id, s.track_name, s.session_type, s.total_laps, s.started_at,
+        self.sessions_where("1 = 1", -1, limit).await
+    }
+
+    pub async fn session(&self, id: i64) -> anyhow::Result<Option<SessionListItem>> {
+        Ok(self.sessions_where("s.id = ?", id, 1).await?.into_iter().next())
+    }
+
+    async fn sessions_where(&self, cond: &str, id: i64, limit: i64) -> anyhow::Result<Vec<SessionListItem>> {
+        let sql = format!(
+            "SELECT s.id, s.session_uid, s.game_year, s.track_id, s.track_name, s.session_type, s.total_laps, s.started_at, s.player_car,
                     (SELECT COUNT(DISTINCT lap) FROM laps l WHERE l.session_id = s.id) AS lap_count
-             FROM sessions s ORDER BY s.id DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+             FROM sessions s WHERE {cond} ORDER BY s.id DESC LIMIT ?"
+        );
+        let mut q = sqlx::query(&sql);
+        if id >= 0 {
+            q = q.bind(id);
+        }
+        let rows = q.bind(limit).fetch_all(&self.pool).await?;
         Ok(rows
             .iter()
             .map(|r| SessionListItem {
@@ -193,6 +206,7 @@ impl Db {
                 total_laps: r.get("total_laps"),
                 started_at: r.get("started_at"),
                 lap_count: r.get("lap_count"),
+                player_car: r.get("player_car"),
             })
             .collect())
     }
@@ -286,7 +300,7 @@ mod tests {
     #[tokio::test]
     async fn session_laps_flashback_outline() {
         let db = Db::open(":memory:").await.unwrap();
-        let s = SessionRow { session_uid: "abc".into(), game_year: 24, track_id: 3, track_name: "Sakhir".into(), session_type: "Race".into(), total_laps: 10 };
+        let s = SessionRow { session_uid: "abc".into(), game_year: 24, track_id: 3, track_name: "Sakhir".into(), session_type: "Race".into(), total_laps: 10, player_car: 3 };
         let id = db.create_session(&s).await.unwrap();
         assert_eq!(db.create_session(&s).await.unwrap(), id, "same uid re-uses row");
         for l in 1..=5 {

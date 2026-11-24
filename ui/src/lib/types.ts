@@ -276,3 +276,72 @@ export interface LapRow {
 }
 
 export type MonitorId = 'timing' | 'track' | 'tyres' | 'power' | 'damage' | 'weather' | 'comms';
+
+// ------------------------------------------------------------------ Debrief (M7)
+
+export interface SessionListItem {
+  id: number;
+  sessionUid: string;
+  gameYear: number;
+  trackId: number;
+  trackName: string;
+  sessionType: string;
+  totalLaps: number;
+  startedAt: string;
+  lapCount: number;
+  playerCar: number | null;
+}
+
+export type LapKindTag = 'clean' | 'firstLap' | 'inLap' | 'outLap' | 'invalid' | 'slow';
+
+export interface StintSummary {
+  compound: string;
+  startLap: number;
+  endLap: number;
+  laps: number;
+  avgLapMs: number | null;
+  /** Lap-time trend over clean laps, ms per lap (+ = slower). */
+  degMsPerLap: number | null;
+  wearPerLap: number | null;
+  endWear: number | null;
+}
+
+export interface FieldRow {
+  carIndex: number;
+  driver: string;
+  finishPosition: number;
+  bestLapMs: number | null;
+  medianLapMs: number | null;
+  pitStops: number;
+}
+
+export interface Debrief {
+  carIndex: number;
+  driver: string;
+  isRace: boolean;
+  totalLaps: number;
+  result: { finishPosition: number; lap1Position: number; positionsGained: number; lapsCompleted: number; pitStops: number };
+  pace: {
+    bestLapMs: number | null;
+    bestLapRank: number | null;
+    medianLapMs: number | null;
+    medianRank: number | null;
+    consistencyMs: number | null;
+    cleanLaps: number;
+    bestSectorsMs: [number | null, number | null, number | null];
+    fieldBestSectorsMs: [number | null, number | null, number | null];
+    theoreticalBestMs: number | null;
+  };
+  stints: StintSummary[];
+  fuel: { startKg: number; endKg: number; avgBurnKg: number } | null;
+  lapKinds: { lap: number; kind: LapKindTag }[];
+  field: FieldRow[];
+  insights: { kind: string; text: string }[];
+}
+
+export interface DebriefResponse {
+  session: SessionListItem;
+  /** False for sessions recorded before the player's car was stored. */
+  playerKnown: boolean;
+  debrief: Debrief;
+}

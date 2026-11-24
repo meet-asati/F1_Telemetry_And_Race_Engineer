@@ -316,5 +316,5 @@ F1 Race Engineer/
 | **M4** | `comms` + `voice-comms` + TTS: rule engine, arbitrator, local radio playback, Copilot approval flow. *(End of first build.)* |
 | **M5** | Voice input: `BUTN` PTT (hold/toggle), `cpal` capture, whisper STT, telemetry-first driver Q&A + LLM fallback, engineer persona, Kokoro voice. *(Wake word/VAD deferred.)* |
 | **M6** | Discord: `songbird` voice streaming, friend-speaking override, slash commands. |
-| **M7** | Debrief: `plotters` PNG + stint summary (Discord post + UI). |
+| **M7** | Debrief: `/debrief` page (result, pace and sector ranks, stints and degradation, field pace, radio log), `GET /api/sessions/:id/debrief`, and a spoken wrap-up after the flag. *(PNG export and the Discord post move to M6.)* |
 | **M8** *(optional)* | Tauri tray shell: start/stop, audio-device picker, autostart. Reuses the same UI and daemon. |
