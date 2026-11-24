@@ -386,6 +386,7 @@ name = "comms"
 version = "0.1.0"
 dependencies = [
  "race-state",
+ "serde",
 ]
 
 [[package]]
@@ -2935,6 +2936,7 @@ dependencies = [
  "anyhow",
  "cpal",
  "hound",
+ "serde",
  "tracing",
 ]
 
