@@ -278,3 +278,117 @@ mod tests {
         assert_eq!(split_sentences("Last lap 1:07.4, best 1:06.9. Fine."), vec!["Last lap 1:07.4, best 1:06.9.", "Fine."]);
     }
 }
+
+/// Radio effect for live audio arriving in small chunks (friend's browser
+/// mic, driver's mic). Filter state carries across chunks so there are no
+/// clicks at chunk edges; a slow automatic gain evens out quiet microphones.
+pub struct RadioFxStream {
+    hp: [Biquad; 2],
+    lp: [Biquad; 2],
+    drive: f32,
+    gain_out: f32,
+    noise: Noise,
+    noise_level: f32,
+    env: f32,
+}
+
+impl RadioFxStream {
+    pub fn new(fx: &RadioFx, fs: u32) -> Self {
+        let q = std::f32::consts::FRAC_1_SQRT_2;
+        let fs = fs as f32;
+        Self {
+            hp: [Biquad::new(Kind::HighPass, fx.low_hz, fs, q); 2],
+            lp: [Biquad::new(Kind::LowPass, fx.high_hz.min(fs * 0.45), fs, q); 2],
+            drive: fx.drive,
+            gain_out: fx.output_gain,
+            noise: Noise(0x9E37_79B9),
+            noise_level: fx.noise_level,
+            env: 0.05,
+        }
+    }
+
+    pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(input.len());
+        for &x in input {
+            // Envelope follower: fast attack, slow release.
+            let a = x.abs();
+            self.env = if a > self.env { a } else { self.env * 0.9995 };
+            let agc = (0.6 / self.env.max(0.03)).min(12.0);
+            let mut y = x * agc + self.noise.next() * self.noise_level;
+            for f in self.hp.iter_mut() {
+                y = f.process(y);
+            }
+            for f in self.lp.iter_mut() {
+                y = f.process(y);
+            }
+            y = (y * self.drive).tanh() / self.drive.tanh();
+            out.push(y * self.gain_out);
+        }
+        out
+    }
+}
+
+/// Linear-interpolating resampler that keeps its phase across chunks, for
+/// live speech that is already band-limited by the radio filter.
+pub struct StreamResampler {
+    step: f64,
+    pos: f64,
+    last: f32,
+}
+
+impl StreamResampler {
+    pub fn new(from_hz: u32, to_hz: u32) -> Self {
+        Self { step: from_hz.max(1) as f64 / to_hz.max(1) as f64, pos: 0.0, last: 0.0 }
+    }
+
+    pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
+        // Sample i of this chunk sits at index i + 1 of [last, input...].
+        let mut out = Vec::with_capacity((input.len() as f64 / self.step) as usize + 1);
+        let at = |k: usize, last: f32| if k == 0 { last } else { input[k - 1] };
+        while self.pos + 1.0 <= input.len() as f64 {
+            let k = self.pos.floor() as usize;
+            let f = (self.pos - k as f64) as f32;
+            let (a, b) = (at(k, self.last), at(k + 1, self.last));
+            out.push(a + (b - a) * f);
+            self.pos += self.step;
+        }
+        self.pos -= input.len() as f64;
+        if let Some(&l) = input.last() {
+            self.last = l;
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    #[test]
+    fn stream_resampler_is_continuous_across_chunks() {
+        let x: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.01).sin()).collect();
+        let mut r = StreamResampler::new(48_000, 16_000);
+        let mut y = Vec::new();
+        for c in x.chunks(441) {
+            y.extend(r.process(c));
+        }
+        assert!((y.len() as i64 - 1600).abs() <= 2, "{}", y.len());
+        // Smooth: no jumps bigger than the signal's own slope allows.
+        assert!(y.windows(2).all(|w| (w[1] - w[0]).abs() < 0.05));
+        let mut up = StreamResampler::new(16_000, 48_000);
+        let z: Vec<f32> = y.chunks(160).flat_map(|c| up.process(c)).collect();
+        assert!((z.len() as i64 - 4800).abs() <= 4);
+    }
+
+    #[test]
+    fn stream_fx_has_no_chunk_clicks_and_lifts_quiet_input() {
+        let quiet: Vec<f32> = (0..16_000).map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 800.0 / 16_000.0).sin() * 0.05).collect();
+        let mut fx = RadioFxStream::new(&RadioFx::preset(RadioStyle::Light), 16_000);
+        let out: Vec<f32> = quiet.chunks(320).flat_map(|c| fx.process(c)).collect();
+        let tail = &out[8000..];
+        let peak = tail.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 0.3, "AGC lifts a quiet mic ({peak})");
+        assert!(out.iter().all(|v| v.abs() <= 1.0));
+        assert!(tail.windows(2).all(|w| (w[1] - w[0]).abs() < 0.5), "no clicks at chunk edges");
+    }
+}

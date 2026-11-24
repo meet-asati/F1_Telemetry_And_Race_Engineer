@@ -67,7 +67,6 @@
       {#each [['positions', 'Positions'], ['speed', 'Speed'], ['inputs', 'Throttle / Brake'], ['ers', 'ERS deploy']] as [m, l]}
         <button class:active={colorMode === m} aria-pressed={colorMode === m} onclick={() => (colorMode = m as ColorMode)}>{l}</button>
       {/each}
-      <span class="faint">Scroll to zoom · drag to pan · click a car to select</span>
     </div>
     <div class="map"><TrackCanvas interactive {colorMode} labels /></div>
     <div class="trace big">

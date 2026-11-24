@@ -27,7 +27,6 @@
     const mine = pitwall.laps.filter((l) => l.carIndex === snap.timing.playerIndex && l.wear);
     return [0, 1, 2, 3].map((i) => ({ label: CORNERS[i], color: CORNER_COLORS[i], points: mine.map((l) => [l.lap, l.wear![i]] as [number, number]) }));
   });
-  const worst = $derived(Math.max(...t.wearPct));
   const wheelStroke = $derived(t.surfaceTempC.map((c) => tempColor(c)));
   const wheelFill = $derived(t.wearPct.map((w) => wearColor(w)));
 </script>
@@ -112,7 +111,6 @@
       presets={['Cool the front tyres on the straights', 'Look after the tyres, manage the slides', 'Box this lap for a new set', 'Tyres are good, push']}
       context={[...[0, 1, 2, 3].map((i) => `${CORNERS[i]} wear ${t.wearPct[i].toFixed(0)}%`), t.projectedPitLap ? `Projected pit L${t.projectedPitLap}` : ''].filter(Boolean)}
     />
-    <p class="faint small">Worst corner {worst.toFixed(1)}%. Projection is a linear fit of this stint's wear per lap to {70}%.</p>
   </div>
 {/if}
 
@@ -246,9 +244,5 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 14px;
-  }
-  .small {
-    font-size: 12px;
-    margin: 0;
   }
 </style>

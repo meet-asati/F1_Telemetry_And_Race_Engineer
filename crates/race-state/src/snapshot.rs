@@ -309,6 +309,10 @@ pub struct CommsState {
     pub ptt_button: u8,
     /// The last "UDP Action N" button the game reported (diagnostics).
     pub last_udp_action: Option<u8>,
+    /// A human engineer is talking live from the browser (duo mode).
+    pub engineer_tx: bool,
+    /// Browsers connected to the team-radio audio channel.
+    pub radio_listeners: u32,
     pub speaking: bool,
     pub last_spoken_line: Option<String>,
     /// The driver's last transcribed radio message.

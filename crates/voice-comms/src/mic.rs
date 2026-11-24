@@ -28,6 +28,8 @@ struct Shared {
     frames: std::sync::atomic::AtomicU64,
     clip: Mutex<Vec<f32>>,
     preroll: Mutex<VecDeque<f32>>,
+    /// Live copy of the audio while a clip is recording (team radio).
+    tap: Mutex<Option<mpsc::SyncSender<Vec<f32>>>>,
 }
 
 pub struct MicCapture {
@@ -82,6 +84,7 @@ impl MicCapture {
             frames: std::sync::atomic::AtomicU64::new(0),
             clip: Mutex::new(Vec::new()),
             preroll: Mutex::new(VecDeque::new()),
+            tap: Mutex::new(None),
         });
         let (ready_tx, ready_rx) = mpsc::channel::<anyhow::Result<(u32, String)>>();
         let (keep_tx, keep_rx) = mpsc::channel::<()>();
@@ -148,6 +151,19 @@ impl MicCapture {
         Ok(Self { shared, sample_rate, device_name, _keepalive: keep_tx })
     }
 
+    /// Mic sample rate in Hz.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Receive live chunks (mono, at [`sample_rate`](Self::sample_rate)) while
+    /// push-to-talk is recording, starting with the pre-roll.
+    pub fn set_tap(&self, tx: Option<mpsc::SyncSender<Vec<f32>>>) {
+        if let Ok(mut t) = self.shared.tap.lock() {
+            *t = tx;
+        }
+    }
+
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
@@ -182,6 +198,9 @@ impl MicCapture {
     /// Start a clip (includes ~300 ms of pre-roll).
     pub fn begin(&self) {
         let pre: Vec<f32> = self.shared.preroll.lock().map(|mut p| p.drain(..).collect()).unwrap_or_default();
+        if let Some(tx) = self.shared.tap.lock().ok().and_then(|t| t.clone()) {
+            let _ = tx.try_send(pre.clone());
+        }
         if let Ok(mut c) = self.shared.clip.lock() {
             c.clear();
             c.extend(pre);
@@ -205,6 +224,13 @@ fn push<T: Copy>(sh: &Shared, data: &[T], ch: usize, preroll_len: usize, max_cli
     sh.frames.fetch_add(mono.len() as u64, Ordering::Relaxed);
     if peak > 0.0 {
         sh.any_signal.store(true, Ordering::Relaxed);
+    }
+    if sh.armed.load(Ordering::Relaxed) {
+        if let Ok(t) = sh.tap.try_lock() {
+            if let Some(tx) = t.as_ref() {
+                let _ = tx.try_send(mono.clone());
+            }
+        }
     }
     let mono = mono.into_iter();
     if sh.armed.load(Ordering::Relaxed) {

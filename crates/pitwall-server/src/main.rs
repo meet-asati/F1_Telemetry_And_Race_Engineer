@@ -8,6 +8,7 @@
 
 mod actors;
 mod config;
+mod duo;
 mod ingest;
 mod voice;
 mod web;
@@ -59,6 +60,9 @@ async fn main() -> anyhow::Result<()> {
     let (comms_tx, comms_rx) = mpsc::channel(256);
     let (audio_tx, audio_rx) = mpsc::channel(32);
     let (voice_tx, voice_rx) = mpsc::channel(64);
+    let (duo_tx, duo_rx) = mpsc::channel(256);
+    let (bus_tx, _) = broadcast::channel::<duo::BusFrame>(512);
+    let radio_listeners = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (events_tx, _) = broadcast::channel(512);
     let (snapshot_json_tx, snapshot_json_rx) = watch::channel(axum::extract::ws::Utf8Bytes::from_static("{}"));
     let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(TelemetrySnapshot::default()));
@@ -131,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
             },
             voice: voice_tx,
             ptt_button: cfg.voice.ptt_button,
+            radio_listeners: radio_listeners.clone(),
             initial_mode,
             rx: comms_rx,
             snapshot: snapshot_rx.clone(),
@@ -210,8 +215,13 @@ async fn main() -> anyhow::Result<()> {
             snapshot: snapshot_rx.clone(),
             comms: comms_tx.clone(),
             persona: cfg.comms.persona,
+            bus: bus_tx.clone(),
+            fx: voice_comms::RadioFx::preset(cfg.audio.radio_fx),
         }
         .run(),
+    );
+    tokio::spawn(
+        duo::DuoActor { rx: duo_rx, player: player.clone(), comms: comms_tx.clone(), bus: bus_tx.clone(), fx: voice_comms::RadioFx::preset(cfg.audio.radio_fx) }.run(),
     );
     tracing::info!("engineer persona: {:?}, radio effect: {:?}", cfg.comms.persona, cfg.audio.radio_fx);
     tokio::spawn(
@@ -225,13 +235,14 @@ async fn main() -> anyhow::Result<()> {
             db: db_tx.clone(),
             fx: voice_comms::RadioFx::preset(cfg.audio.radio_fx),
             warm: comms::answers::warm_phrases(cfg.comms.persona),
+            bus: bus_tx.clone(),
         }
         .run(),
     );
 
     // ---- Web.
     let hub = Hub { snapshot_json: snapshot_json_rx, snapshot: snapshot_rx, events: events_tx, current_session: current_rx, health: health_rx };
-    let app = web::router(web::AppState { hub, comms: comms_tx, db, token: cfg.http.token.clone() }, PathBuf::from(&cfg.http.ui_dir));
+    let app = web::router(web::AppState { hub, comms: comms_tx, db, token: cfg.http.token.clone(), duo: duo_tx, bus: bus_tx, radio_listeners }, PathBuf::from(&cfg.http.ui_dir));
     let listener = tokio::net::TcpListener::bind(&cfg.http.bind).await.map_err(|e| anyhow::anyhow!("bind HTTP {}: {e}", cfg.http.bind))?;
     tracing::info!("pit wall on http://{}  (auth: {})", cfg.http.bind, if cfg.http.token.is_some() { "token" } else { "none" });
     axum::serve(listener, app).with_graceful_shutdown(async {

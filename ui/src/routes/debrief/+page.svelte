@@ -105,7 +105,6 @@
         {/each}
       </select>
     {/if}
-    {#if data && !data.playerKnown}<span class="chip warn">Recorded before your car was tracked: pick yourself in the driver list</span>{/if}
     {#if loading}<span class="faint">Loading…</span>{/if}
   </div>
 
@@ -133,8 +132,8 @@
             <div class="kpis num">
               <div><span class="k">Best lap</span><b class="purple">{lapTime(d.pace.bestLapMs)}</b><span class="dim">{d.pace.bestLapRank ? ordinal(d.pace.bestLapRank) : ''}</span></div>
               <div><span class="k">Race pace</span><b>{lapTime(d.pace.medianLapMs)}</b><span class="dim">{d.pace.medianRank ? ordinal(d.pace.medianRank) : ''}</span></div>
-              <div><span class="k">Ideal lap</span><b>{lapTime(d.pace.theoreticalBestMs)}</b><span class="dim">sum of best sectors</span></div>
-              <div><span class="k">Consistency</span><b>{secs(d.pace.consistencyMs)}</b><span class="dim">σ, {d.pace.cleanLaps} clean laps</span></div>
+              <div><span class="k">Ideal lap</span><b>{lapTime(d.pace.theoreticalBestMs)}</b></div>
+              <div><span class="k">Consistency</span><b>{secs(d.pace.consistencyMs)}</b></div>
               <div><span class="k">Laps / stops</span><b>{d.result.lapsCompleted} / {d.result.pitStops}</b></div>
               {#if d.fuel}<div><span class="k">Fuel at flag</span><b>{d.fuel.endKg.toFixed(1)} kg</b><span class="dim">{d.fuel.avgBurnKg.toFixed(2)} kg/lap</span></div>{/if}
             </div>
@@ -165,7 +164,7 @@
       <!-- Lap times -->
       <section class="mon" style="grid-area: laps">
         <div class="mon-screen">
-          <header class="mon-head"><span class="ch">01</span><h2>Lap times</h2><span class="faint small">pit and safety-car laps clipped</span></header>
+          <header class="mon-head"><span class="ch">01</span><h2>Lap times</h2></header>
           <div class="mon-body">
             <LineChart series={lapSeries} height={200} xLabel="lap" yFormat={(v) => v.toFixed(1)} />
           </div>
@@ -254,7 +253,7 @@
       <!-- Field -->
       <section class="mon" style="grid-area: field">
         <div class="mon-screen">
-          <header class="mon-head"><span class="ch">05</span><h2>Field pace</h2><span class="faint small">click a driver to see their debrief</span></header>
+          <header class="mon-head"><span class="ch">05</span><h2>Field pace</h2></header>
           <div class="mon-body">
             <table class="num field">
               <thead><tr><th>P</th><th>Driver</th><th class="r">Best</th><th class="r">Race pace</th><th class="r">Stops</th></tr></thead>

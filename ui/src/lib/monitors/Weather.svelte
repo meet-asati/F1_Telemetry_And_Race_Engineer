@@ -58,7 +58,6 @@
           <div class="faint small">{f.trackTempC}° / {f.airTempC}°</div>
         </div>
       {/each}
-      {#if s.weatherForecast.length === 0}<p class="faint">No forecast samples received.</p>{/if}
     </div>
     <div class="label">Session &amp; flag log</div>
     <ul class="log">

@@ -83,6 +83,16 @@ Clicking a monitor opens it as a large **in-window popup monitor** (same bezel a
   - the Safety Car / VSC banner.
 - Controls: a large **Hold to talk** button (touch-friendly) and mute. (An in-game overlay on top of a fullscreen game isn't practical, so it is out of scope.)
 
+### 2.7 Duo mode (team radio)
+
+- Top bar: **RADIO** (join or leave the audio channel) and **TALK** (hold the button or the **T** key). While talking, a mic level meter shows. Chips show who is on air: DRIVER (pulsing) or AI.
+- Audio travels over `/ws/radio`, which takes `?token=` when auth is on:
+  - The browser captures its mic in an AudioWorklet (`/radio-worklet.js`) at 16 kHz mono Int16, in 20 ms frames, and sends `{"type":"tx","active":bool}` to key up.
+  - The server sends binary frames `[source][Int16 LE …]` at 16 kHz. Source 1 is the AI engineer, 2 the driver and 3 another friend. The browser schedules them with an 80 ms lead.
+- On the server, the friend's voice goes through the live radio effect with an 80 ms jitter buffer and plays on the driver's speakers. The AI holds everything except P0 calls while the friend talks. If the browser stops sending for 1.5 s, the channel closes.
+- `comms.engineerTx` and `comms.radioListeners` are in the snapshot.
+- The microphone only works on a secure origin (HTTPS via `tailscale serve`, or localhost).
+
 ### 2.6 Debrief (`/debrief?session=&car=`)
 
 - Reached from the top bar. The link turns into a pulsing **Debrief ready** chip when the session phase is `finished`.

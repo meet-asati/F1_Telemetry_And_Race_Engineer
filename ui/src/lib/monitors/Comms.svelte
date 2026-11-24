@@ -4,7 +4,7 @@
   import type { RadioEvent, Suggestion, TelemetrySnapshot } from '$lib/types';
   import RadioComposer from '$lib/components/RadioComposer.svelte';
   import Icon from '$lib/components/Icon.svelte';
-  import PushToTalk from '$lib/components/PushToTalk.svelte';
+  import TeamRadio from '$lib/components/TeamRadio.svelte';
   import MicMeter from '$lib/components/MicMeter.svelte';
   import { onMount } from 'svelte';
 
@@ -15,7 +15,6 @@
   let editText = $state('');
   let filter = $state<'all' | 'friend' | 'rule' | 'llm' | 'driver'>('all');
   let question = $state('');
-  const QUICK_QUESTIONS = ['Radio check', 'Gap behind?', 'How are the tyres?', 'Should I box this lap?', 'Fuel?', 'Can we make it to the end on these tyres?'];
   function ask(q: string) {
     if (pitwall.ask(q)) question = '';
   }
@@ -31,14 +30,6 @@
       /* offline */
     }
   });
-  const wheel = $derived(
-    c.lastUdpAction == null
-      ? { cls: 'idle', text: `Waiting for a press of UDP Action ${c.pttButton || 1} from the game` }
-      : c.lastUdpAction === c.pttButton
-        ? { cls: 'ok', text: `Wheel push-to-talk working (UDP Action ${c.lastUdpAction})` }
-        : { cls: 'bad', text: `Game sent UDP Action ${c.lastUdpAction}, but push-to-talk listens to UDP Action ${c.pttButton}. Re-map the button or set [voice] ptt_button = ${c.lastUdpAction}.` }
-  );
-
   const log = $derived(pitwall.radioLog.filter((r) => filter === 'all' || r.source === filter));
 
   function startEdit(s: Suggestion) {
@@ -98,97 +89,86 @@
       <button class:active={c.mode === 'auto'} onclick={() => pitwall.send({ type: 'comms.setMode', mode: 'auto' })}>Auto-Speak</button>
       <button class:active={c.mode === 'copilot'} onclick={() => pitwall.send({ type: 'comms.setMode', mode: 'copilot' })}>Copilot Approval</button>
       <button class:active={c.muted} onclick={() => pitwall.send({ type: 'comms.mute', muted: !c.muted })}><Icon name={c.muted ? 'mute' : 'volume'} />{c.muted ? 'AI muted' : 'AI audible'}</button>
-      {#if c.friendOverrideActive}<span class="chip override num">Friend override {Math.ceil(c.overrideRemainingMs / 1000)}s — AI P2 held</span>{/if}
+      {#if c.friendOverrideActive}<span class="chip override num">OVERRIDE {Math.ceil(c.overrideRemainingMs / 1000)}s</span>{/if}
     </div>
 
     <section>
-      <div class="label">Copilot approval queue</div>
-      {#if c.pendingSuggestions.length === 0}
-        <p class="faint">{c.mode === 'copilot' ? 'No suggestions waiting.' : 'Switch to Copilot Approval to review AI callouts before they are spoken.'}</p>
-      {/if}
-      {#each c.pendingSuggestions as s (s.id)}
-        <div class="card">
-          <div class="card-head">
-            <span class="chip">{s.priority}</span>
-            <span class="chip">{s.category}</span>
-            <span class="faint num">expires in {remaining(s)}s</span>
-          </div>
-          {#if editing === s.id}
-            <textarea bind:value={editText} rows="2"></textarea>
-          {:else}
-            <p class="msg">{s.message}</p>
-          {/if}
-          {#if s.contextAttachments.length}
-            <div class="att">{#each s.contextAttachments as a}<span class="chip">{a}</span>{/each}</div>
-          {/if}
-          <div class="actions">
-            {#if editing === s.id}
-              <button class="primary" onclick={() => sendEdit(s)}>Send edited</button>
-              <button onclick={() => (editing = null)}>Cancel</button>
-            {:else}
-              <button class="primary" onclick={() => pitwall.send({ type: 'suggestion.approve', id: s.id })}><Icon name="check" /> Approve &amp; speak</button>
-              <button onclick={() => startEdit(s)}><Icon name="edit" /> Edit &amp; send</button>
-              <button class="danger" onclick={() => pitwall.send({ type: 'suggestion.dismiss', id: s.id })}><Icon name="close" /> Dismiss</button>
-            {/if}
-          </div>
-        </div>
-      {/each}
+      <div class="label">Team radio</div>
+      <TeamRadio large />
     </section>
 
+    {#if c.mode === 'copilot' || c.pendingSuggestions.length}
+      <section>
+        <div class="label">Copilot queue</div>
+        {#each c.pendingSuggestions as s (s.id)}
+          <div class="card">
+            <div class="card-head">
+              <span class="chip">{s.priority}</span>
+              <span class="chip">{s.category}</span>
+              <span class="faint num">expires in {remaining(s)}s</span>
+            </div>
+            {#if editing === s.id}
+              <textarea bind:value={editText} rows="2"></textarea>
+            {:else}
+              <p class="msg">{s.message}</p>
+            {/if}
+            {#if s.contextAttachments.length}
+              <div class="att">{#each s.contextAttachments as a}<span class="chip">{a}</span>{/each}</div>
+            {/if}
+            <div class="actions">
+              {#if editing === s.id}
+                <button class="primary" onclick={() => sendEdit(s)}>Send edited</button>
+                <button onclick={() => (editing = null)}>Cancel</button>
+              {:else}
+                <button class="primary" onclick={() => pitwall.send({ type: 'suggestion.approve', id: s.id })}><Icon name="check" /> Approve &amp; speak</button>
+                <button onclick={() => startEdit(s)}><Icon name="edit" /> Edit &amp; send</button>
+                <button class="danger" onclick={() => pitwall.send({ type: 'suggestion.dismiss', id: s.id })}><Icon name="close" /> Dismiss</button>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      </section>
+    {/if}
+
     <section>
-      <div class="label">Driver voice (push-to-talk)</div>
+      <div class="label">Driver voice</div>
       <div class="status">
-        <span class="chip" class:ok={c.micAvailable}>MIC {c.micAvailable ? 'OPEN' : 'NONE'}</span>
-        <span class="chip" class:ok={c.sttAvailable}>SPEECH-TO-TEXT {c.sttAvailable ? 'READY' : 'OFFLINE'}</span>
-        <span class="chip" class:ok={c.llmAvailable}>LLM {c.llmAvailable ? 'READY' : 'OFFLINE'}</span>
-        <span class="chip" class:ok={c.ttsAvailable}>VOICE {c.ttsAvailable ? 'KOKORO READY' : 'TEXT ONLY'}</span>
-        {#if c.thinking}<span class="chip thinking">ENGINEER THINKING…</span>{/if}
+        <span class="chip" class:ok={c.micAvailable} class:bad={c.micBlocked} title={c.micBlocked ? 'Windows is blocking the microphone: Settings > Privacy & security > Microphone' : ''}>
+          MIC {c.micBlocked ? 'BLOCKED' : c.micAvailable ? 'OK' : 'NONE'}
+        </span>
+        <span class="chip" class:ok={c.lastUdpAction === c.pttButton} class:bad={c.lastUdpAction != null && c.lastUdpAction !== c.pttButton}>
+          WHEEL {c.lastUdpAction == null ? `UDP ${c.pttButton || 1} —` : `UDP ${c.lastUdpAction}`}
+        </span>
+        <span class="chip" class:ok={c.sttAvailable}>STT {c.sttAvailable ? 'OK' : 'OFF'}</span>
+        <span class="chip" class:ok={c.llmAvailable}>LLM {c.llmAvailable ? 'OK' : 'OFF'}</span>
+        <span class="chip" class:ok={c.ttsAvailable}>VOICE {c.ttsAvailable ? 'OK' : 'TEXT'}</span>
+        {#if c.thinking}<span class="chip thinking">THINKING</span>{/if}
       </div>
       <div class="mic-row">
-        <label class="label" for="mic-select">Microphone</label>
         <select
-          id="mic-select"
+          aria-label="Driver microphone"
           value={c.micDevice ?? ''}
           onchange={(e) => pitwall.send({ type: 'voice.setMic', device: (e.currentTarget as HTMLSelectElement).value })}
         >
-          {#if !c.micDevice}<option value="">— none open —</option>{/if}
+          {#if !c.micDevice}<option value="">—</option>{/if}
           {#each mics as m}
-            <option value={m.name} disabled={m.virtual}>{m.name}{m.virtual ? ' (virtual, not a mic)' : ''}</option>
+            <option value={m.name} disabled={m.virtual}>{m.name}</option>
           {/each}
           {#if c.micDevice && !mics.some((m) => m.name === c.micDevice)}<option value={c.micDevice}>{c.micDevice}</option>{/if}
         </select>
         <div class="meter-wrap"><MicMeter level={c.micLevel} /></div>
       </div>
-      {#if c.micBlocked}
-        <p class="wheel bad">
-          This microphone sends pure silence. Windows is probably blocking it: Settings → Privacy &amp; security → Microphone → turn on “Let desktop apps access
-          your microphone”, then pick the mic again.
-        </p>
-      {:else}
-        <p class="hint">Speak now: the meter should move. If it stays flat, pick another microphone.</p>
-      {/if}
-      <p class="wheel {wheel.cls}">{wheel.text}</p>
-      <div class="voice-row">
-        <PushToTalk />
-        <form class="ask" onsubmit={(e) => (e.preventDefault(), ask(question))}>
-          <input bind:value={question} placeholder="Ask as the driver, e.g. “what's the gap behind?”" aria-label="Driver question" />
-          <button class="primary" disabled={!question.trim()}>Ask engineer</button>
-        </form>
-      </div>
-      <div class="quick">
-        {#each QUICK_QUESTIONS as q}<button onclick={() => ask(q)}>{q}</button>{/each}
-      </div>
-      <p class="faint hint">
-        In the game, map a wheel button to <b>UDP Action {c.pttButton || 1}</b> (Controls) and hold it to talk. Gaps, tyres, fuel, pace and box calls are answered from telemetry
-        instantly; anything else goes to the local LLM.
-      </p>
+      <form class="ask" onsubmit={(e) => (e.preventDefault(), ask(question))}>
+        <input bind:value={question} placeholder="Ask the engineer…" aria-label="Driver question" />
+        <button class="primary" disabled={!question.trim()}>Ask</button>
+      </form>
     </section>
 
     <section>
       <div class="label">Manual radio console</div>
       <RadioComposer
         presets={['Box box, box box', 'Stay out, stay out', 'Push now, quali mode', 'Good job, keep it clean', 'Copy, understood']}
-        placeholder="Type a message — Enter sends to the driver"
+        placeholder="Message to the driver…"
       />
     </section>
 
@@ -284,11 +264,14 @@
   .thinking {
     color: var(--watch);
   }
-  .status,
-  .quick {
+  .status {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+  }
+  .status .bad {
+    color: var(--crit);
+    border-color: var(--crit);
   }
   .status .ok {
     color: var(--data);
@@ -297,9 +280,6 @@
   .chip.thinking {
     border-color: var(--watch);
     animation: blink 1s steps(2) infinite;
-  }
-  .quick button {
-    font-size: 12px;
   }
   .mic-row {
     display: flex;
@@ -318,29 +298,6 @@
   .mini-meter {
     width: 44px;
   }
-  .wheel {
-    margin: 0;
-    font-size: 12.5px;
-    padding: 6px 8px;
-    border: 1px solid var(--hairline);
-    border-radius: 3px;
-  }
-  .wheel.ok {
-    color: var(--data);
-    border-color: rgba(77, 250, 154, 0.5);
-  }
-  .wheel.bad {
-    color: var(--watch);
-    border-color: var(--watch);
-  }
-  .wheel.idle {
-    color: var(--text-dim);
-  }
-  .voice-row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
   .ask {
     flex: 1;
     min-width: 260px;
@@ -350,10 +307,6 @@
   .ask input {
     flex: 1;
     min-width: 0;
-  }
-  .hint {
-    margin: 0;
-    font-size: 12px;
   }
   .speaking {
     color: var(--crit);

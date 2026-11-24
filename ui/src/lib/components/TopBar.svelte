@@ -3,6 +3,7 @@
   import { LAYOUTS, type LayoutPreset } from '$lib/monitors';
   import { clock, weatherGlyph } from '$lib/format';
   import Icon from './Icon.svelte';
+  import TeamRadio from './TeamRadio.svelte';
 
   let showSettings = $state(false);
   let tokenDraft = $state(pitwall.token);
@@ -40,6 +41,7 @@
   {#if flag}<div class="flag" role="status"><Icon name="flag" /> {flag}</div>{/if}
 
   <div class="right">
+    <TeamRadio />
     <span class="pill {source.cls}" title="Telemetry source">{source.label}</span>
     <span class="pill {pitwall.connected ? 'ok' : 'bad'}" title="WebSocket">{pitwall.connected ? `WS ${pitwall.msgRate} msg/s` : 'WS reconnecting…'}</span>
 

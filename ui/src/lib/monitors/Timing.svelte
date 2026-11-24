@@ -114,7 +114,6 @@
         </tbody>
       </table>
     </div>
-    <p class="hint dim">Click a row (or a car on the track map) to compare against that driver.</p>
     <div class="charts">
       <div>
         <div class="label">Gap trend vs {rival?.driverLabel ?? '—'} (s, + = they are behind)</div>
@@ -289,10 +288,6 @@
     padding: 0 4px;
     margin-right: 3px;
     font-size: 11px;
-  }
-  .hint {
-    margin: 0;
-    font-size: 12px;
   }
   .charts {
     display: grid;

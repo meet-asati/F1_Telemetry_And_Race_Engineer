@@ -202,6 +202,9 @@ pub struct VoiceActor {
     pub snapshot: watch::Receiver<Arc<TelemetrySnapshot>>,
     pub comms: mpsc::Sender<CommsCmd>,
     pub persona: Persona,
+    /// Team-radio bus (the driver's transmissions go to listening browsers).
+    pub bus: crate::duo::Bus,
+    pub fx: voice_comms::RadioFx,
 }
 
 impl VoiceActor {
@@ -211,6 +214,9 @@ impl VoiceActor {
         let mut check = tokio::time::interval(Duration::from_millis(250));
         let mut last_health = 0u64;
         let mut status = VoiceStatus::default();
+        if let Some(m) = &self.mic {
+            crate::duo::attach_driver_mic(m, self.bus.clone(), self.fx.clone());
+        }
         let mut last_level = -1.0f32;
         let mut last_blocked: Option<bool> = None;
         let mut level_tick = tokio::time::interval(Duration::from_millis(100));
@@ -337,6 +343,7 @@ impl VoiceActor {
         match tokio::task::spawn_blocking(move || MicCapture::start(want.as_deref())).await {
             Ok(Ok(m)) => {
                 tracing::info!("microphone switched to '{}'", m.device_name());
+                crate::duo::attach_driver_mic(&m, self.bus.clone(), self.fx.clone());
                 let _ = self.comms.send(CommsCmd::MicBlocked(false)).await;
                 save_mic(&name);
                 let _ = self.comms.send(CommsCmd::MicDevice(Some(m.device_name().to_string()))).await;

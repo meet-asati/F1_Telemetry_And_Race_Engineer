@@ -115,6 +115,8 @@ pub struct Arbitrator {
     next_id: u64,
     tts_available: bool,
     ptt_active: bool,
+    /// The human engineer is talking live (duo mode).
+    engineer_tx: bool,
     events: Vec<PitWallEvent>,
 }
 
@@ -134,6 +136,7 @@ impl Arbitrator {
             next_id: 1,
             tts_available: false,
             ptt_active: false,
+            engineer_tx: false,
             events: Vec::new(),
         }
     }
@@ -223,6 +226,13 @@ impl Arbitrator {
         id
     }
 
+    /// The human engineer is talking live from the browser: hold the AI
+    /// (anything but P0), and keep the override running after they stop.
+    pub fn set_engineer_tx(&mut self, on: bool, now: u64) {
+        self.engineer_tx = on;
+        self.friend_speaking(now);
+    }
+
     /// The friend started speaking on voice chat (Discord, later milestone).
     pub fn friend_speaking(&mut self, now: u64) {
         self.override_until_ms = self.override_until_ms.max(now + self.cfg.override_ms);
@@ -274,7 +284,7 @@ impl Arbitrator {
     }
 
     fn gate_open(&self, ctx: &GateCtx, now: u64) -> bool {
-        ctx.phase == "racing" && !ctx.in_pit && ctx.throttle >= self.cfg.gate_throttle && ctx.steer.abs() <= self.cfg.gate_steer && !self.override_active(now) && !self.ptt_active
+        ctx.phase == "racing" && !ctx.in_pit && ctx.throttle >= self.cfg.gate_throttle && ctx.steer.abs() <= self.cfg.gate_steer && !self.override_active(now) && !self.ptt_active && !self.engineer_tx
     }
 
     /// Playback reports the real end time of the current line.
@@ -312,7 +322,7 @@ impl Arbitrator {
         let idx = self.queue.iter().position(|q| match q.priority {
             Priority::P0 => !speaking || self.speaking_priority == Some(Priority::P2),
             // Radio is half-duplex: nothing but P0 while the driver is transmitting.
-            Priority::P1 => !speaking && !self.ptt_active,
+            Priority::P1 => !speaking && !self.ptt_active && !self.engineer_tx,
             Priority::P2 => !speaking && self.gate_open(ctx, now),
         })?;
         let q = self.queue.remove(idx);
@@ -469,5 +479,17 @@ mod tests {
         let u = a.tick(10, &straight()).unwrap();
         assert_eq!(u.source, RadioSource::Friend);
         assert!(a.drain_events().iter().any(|e| matches!(e, PitWallEvent::Radio { outcome: RadioOutcome::Suppressed, .. })));
+    }
+
+    #[test]
+    fn human_engineer_on_the_radio_holds_the_ai() {
+        let mut a = Arbitrator::new(ArbConfig::default());
+        let straight = GateCtx { throttle: 1.0, steer: 0.0, in_pit: false, phase: "racing".into() };
+        a.set_engineer_tx(true, 0);
+        a.driver_answer("Gap is 1.2.".into(), RadioSource::Rule, 0);
+        assert!(a.tick(100, &straight).is_none(), "answers wait while the engineer talks");
+        a.set_engineer_tx(false, 2000);
+        assert!(a.tick(2100, &straight).is_some(), "then they play");
+        assert!(a.state(2100).friend_override_active, "override keeps P2 quiet a little longer");
     }
 }

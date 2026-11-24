@@ -159,11 +159,18 @@ After the chequered flag the engineer gives a two-line wrap-up on the radio, and
 
 The data comes from `GET /api/sessions/{id}/debrief?car=N` (defaults to your car).
 
-## Friend on the pit wall (Tailscale)
+## Friend on the pit wall: duo mode (Tailscale)
 
 1. Install Tailscale on both machines.
-2. Your friend opens `http://<your-tailscale-ip>:8080`.
-3. To limit who can send radio, approve callouts or change modes, set a shared token: `pitwall-server --token <secret>` or `[http] token`. The friend enters the token under ⚙ in the top bar.
+2. On the gaming PC, serve the pit wall over HTTPS. Browsers only allow the microphone on HTTPS or localhost.
+   ```sh
+   tailscale serve --bg 8081
+   ```
+   Your friend opens `https://<your-pc>.<tailnet>.ts.net`. Plain `http://100.x.y.z:8081` works for watching and typed radio, but not for talking.
+3. **Team radio** is in the top bar:
+   - **RADIO** joins the channel. Your friend hears the AI engineer and your push-to-talk.
+   - **TALK** (hold it, or hold **T**) streams their mic to your speakers through the radio effect. While they talk, the AI engineer goes quiet, and its routine calls stay held for a few seconds after.
+4. To limit who can talk, send radio, approve callouts or change modes, set a shared token: `pitwall-server --token <secret>` or `[http] token`. Your friend enters it under the settings button in the top bar.
 
 ## Layout
 

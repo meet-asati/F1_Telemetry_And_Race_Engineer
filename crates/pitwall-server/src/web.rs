@@ -21,11 +21,16 @@ pub struct AppState {
     pub comms: mpsc::Sender<CommsCmd>,
     pub db: Option<Db>,
     pub token: Option<String>,
+    /// Duo mode: friend voice in, team radio out.
+    pub duo: mpsc::Sender<crate::duo::DuoCmd>,
+    pub bus: crate::duo::Bus,
+    pub radio_listeners: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 pub fn router(state: AppState, ui_dir: PathBuf) -> Router {
     let api = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/ws/radio", get(radio_ws))
         .route("/api/health", get(health))
         .route("/api/snapshot", get(snapshot))
         .route("/api/sessions", get(sessions))
@@ -88,6 +93,81 @@ async fn client_loop(socket: WebSocket, state: AppState) {
             }
         }
     }
+}
+
+#[derive(Deserialize)]
+struct RadioQuery {
+    token: Option<String>,
+}
+
+/// Team-radio audio socket (duo mode).
+///
+/// * Server → browser: binary frames `[source u8][i16 LE mono @ 16 kHz ...]`
+///   (source 1 = AI engineer, 2 = driver, 3 = another friend).
+/// * Browser → server: text `{"type":"tx","active":bool}` to key the radio,
+///   then binary i16 LE mono @ 16 kHz while transmitting.
+async fn radio_ws(ws: WebSocketUpgrade, State(state): State<AppState>, axum::extract::Query(q): axum::extract::Query<RadioQuery>) -> Response {
+    if !authorized(&state, q.token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "team radio needs the session token").into_response();
+    }
+    ws.on_upgrade(move |socket| radio_loop(socket, state))
+}
+
+static RADIO_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+async fn radio_loop(socket: WebSocket, state: AppState) {
+    use crate::duo::DuoCmd;
+    use std::sync::atomic::Ordering;
+    let me = RADIO_IDS.fetch_add(1, Ordering::Relaxed);
+    let (mut tx, mut rx) = socket.split();
+    let mut bus = state.bus.subscribe();
+    state.radio_listeners.fetch_add(1, Ordering::Relaxed);
+    tracing::info!("team radio: listener connected ({} on the channel)", state.radio_listeners.load(Ordering::Relaxed));
+    let mut transmitting = false;
+    loop {
+        tokio::select! {
+            frame = bus.recv() => match frame {
+                Ok(f) if f.from == me => {}
+                Ok(f) => {
+                    let mut bytes = Vec::with_capacity(1 + f.pcm.len() * 2);
+                    bytes.push(f.source as u8);
+                    for s in f.pcm.iter() {
+                        bytes.extend_from_slice(&s.to_le_bytes());
+                    }
+                    if tx.send(Message::Binary(bytes.into())).await.is_err() { break; }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => tracing::debug!("radio listener lagged {n} frames"),
+                Err(_) => break,
+            },
+            incoming = rx.next() => {
+                let Some(Ok(msg)) = incoming else { break };
+                match msg {
+                    Message::Text(t) => {
+                        let v: serde_json::Value = serde_json::from_str(&t).unwrap_or_default();
+                        if v["type"] == "tx" {
+                            let on = v["active"].as_bool().unwrap_or(false);
+                            if on != transmitting {
+                                transmitting = on;
+                                let cmd = if on { DuoCmd::TxStart { from: me } } else { DuoCmd::TxStop { from: me } };
+                                let _ = state.duo.send(cmd).await;
+                            }
+                        }
+                    }
+                    Message::Binary(b) if transmitting => {
+                        let pcm: Vec<i16> = b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+                        let _ = state.duo.try_send(DuoCmd::Audio { from: me, pcm });
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+    if transmitting {
+        let _ = state.duo.send(DuoCmd::TxStop { from: me }).await;
+    }
+    state.radio_listeners.fetch_sub(1, Ordering::Relaxed);
+    tracing::info!("team radio: listener left");
 }
 
 async fn handle_command(state: &AppState, text: &str) -> Option<String> {

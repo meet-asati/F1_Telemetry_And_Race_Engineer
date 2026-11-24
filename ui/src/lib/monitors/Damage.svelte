@@ -86,7 +86,7 @@
             <span class="dim">Ride height F / R</span><span>{d.setup.frontRideHeight} / {d.setup.rearRideHeight}</span>
           </div>
         {:else}
-          <p class="faint">Setup not received yet (or restricted).</p>
+          <p class="faint">—</p>
         {/if}
       </div>
     </div>

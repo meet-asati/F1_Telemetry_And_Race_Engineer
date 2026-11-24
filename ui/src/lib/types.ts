@@ -182,6 +182,10 @@ export interface CommsState {
   pttButton: number;
   /** The last "UDP Action N" button the game reported. */
   lastUdpAction: number | null;
+  /** A human engineer is talking live from the browser (duo mode). */
+  engineerTx: boolean;
+  /** Browsers connected to the team-radio audio channel. */
+  radioListeners: number;
   speaking: boolean;
   lastSpokenLine: string | null;
   /** The driver's last radio message (transcript or typed question). */

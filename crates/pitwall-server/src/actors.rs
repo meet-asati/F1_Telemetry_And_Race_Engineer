@@ -87,6 +87,8 @@ pub enum CommsCmd {
     Thinking(bool),
     VoiceStatus(VoiceStatus),
     MicLevel(f32),
+    /// The human engineer is talking live (duo mode).
+    EngineerTx(bool),
     /// Race over: the engineer's spoken wrap-up.
     Debrief(Box<race_state::debrief::Debrief>),
     MicBlocked(bool),
@@ -254,6 +256,8 @@ pub struct CommsActor {
     pub voice: mpsc::Sender<VoiceCmd>,
     /// Configured "UDP Action N" for push-to-talk (shown in the UI).
     pub ptt_button: u8,
+    /// Browsers on the team-radio channel.
+    pub radio_listeners: Arc<std::sync::atomic::AtomicUsize>,
     pub initial_mode: CommsMode,
     pub rx: mpsc::Receiver<CommsCmd>,
     pub snapshot: watch::Receiver<Arc<TelemetrySnapshot>>,
@@ -292,6 +296,7 @@ impl CommsActor {
         let mut last_driver_line: Option<String> = None;
         let mut mic_level = 0.0f32;
         let mut mic_blocked = false;
+        let mut engineer_tx = false;
         let mut mic_device: Option<String> = None;
         let mut last_udp_action: Option<u8> = None;
         let mut arb = Arbitrator::new(self.cfg.clone());
@@ -346,6 +351,10 @@ impl CommsActor {
                         CommsCmd::Thinking(v) => thinking = v,
                         CommsCmd::VoiceStatus(v) => voice_status = v,
                         CommsCmd::MicLevel(v) => mic_level = v,
+                        CommsCmd::EngineerTx(on) => {
+                            engineer_tx = on;
+                            arb.set_engineer_tx(on, now);
+                        }
                         CommsCmd::Debrief(d) => {
                             if let Some(text) = rules.debrief_lines(&d) {
                                 arb.driver_answer(text, RadioSource::Rule, now);
@@ -393,6 +402,8 @@ impl CommsActor {
                     st.mic_device = mic_device.clone();
                     st.ptt_button = self.ptt_button;
                     st.last_udp_action = last_udp_action;
+                    st.engineer_tx = engineer_tx;
+                    st.radio_listeners = self.radio_listeners.load(Ordering::Relaxed) as u32;
                     self.state_out.send_if_modified(|cur| {
                         let changed = *cur != st;
                         if changed { *cur = st; }
@@ -419,6 +430,8 @@ pub struct AudioActor {
     /// Fixed phrases to pre-synthesize in the background, with the priority
     /// they are spoken at (the speed is part of the cache key).
     pub warm: Vec<(String, Priority)>,
+    /// Team-radio bus: what is said also goes to listening browsers.
+    pub bus: crate::duo::Bus,
 }
 
 /// Urgent calls come a touch quicker, routine ones a touch calmer.
@@ -498,8 +511,10 @@ impl AudioActor {
                 break;
             }
             let fx = self.fx.clone();
+            let bus = self.bus.clone();
             let samples = tokio::task::spawn_blocking(move || {
                 let wet = fx.process_part(&pcm.samples, pcm.sample_rate, seed.wrapping_add(i as u32), i == 0, i + 1 == n);
+                crate::duo::publish(&bus, crate::duo::BusSource::Engineer, &wet, pcm.sample_rate);
                 voice_comms::resample(&wet, pcm.sample_rate, rate)
             })
             .await?;
