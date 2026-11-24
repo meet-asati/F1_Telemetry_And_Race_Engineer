@@ -8,7 +8,7 @@
 use crate::actors::{now_ms, CommsCmd};
 use crate::config::{PttMode, VoiceConfig};
 use ai_sidecar::{LlmClient, Pcm, SttClient};
-use comms::answers;
+use comms::{answers, Persona};
 use race_state::snapshot::{RadioSource, TelemetrySnapshot};
 use std::sync::Arc;
 use std::time::Duration;
@@ -201,6 +201,7 @@ pub struct VoiceActor {
     pub player: Option<Arc<AudioPlayer>>,
     pub snapshot: watch::Receiver<Arc<TelemetrySnapshot>>,
     pub comms: mpsc::Sender<CommsCmd>,
+    pub persona: Persona,
 }
 
 impl VoiceActor {
@@ -375,14 +376,14 @@ impl VoiceActor {
             self.radio_problem("Copy your transmission, but speech-to-text is switched off.").await;
             return;
         }
-        let (stt, comms, llm, snap) = (self.stt.clone(), self.comms.clone(), self.llm.clone(), self.snapshot.clone());
+        let (stt, comms, llm, snap, persona) = (self.stt.clone(), self.comms.clone(), self.llm.clone(), self.snapshot.clone(), self.persona);
         tokio::spawn(async move {
             let _ = comms.send(CommsCmd::Thinking(true)).await;
             let t0 = now_ms();
             let text = transcribe(&stt, &clip).await;
             tracing::info!("driver ({} ms clip, {} ms STT): {:?}", clip.duration_ms(), now_ms() - t0, text);
             match text {
-                Some(t) if !t.is_empty() => answer(t, &comms, &llm, &snap, status).await,
+                Some(t) if !t.is_empty() => answer(t, &comms, &llm, &snap, status, persona).await,
                 Some(_) => {
                     let _ = comms.send(CommsCmd::DriverAnswer { text: answers::SAY_AGAIN.into(), source: RadioSource::Rule }).await;
                 }
@@ -396,10 +397,10 @@ impl VoiceActor {
     }
 
     fn spawn_answer(&self, text: String, status: VoiceStatus) {
-        let (comms, llm, snap) = (self.comms.clone(), self.llm.clone(), self.snapshot.clone());
+        let (comms, llm, snap, persona) = (self.comms.clone(), self.llm.clone(), self.snapshot.clone(), self.persona);
         tokio::spawn(async move {
             let _ = comms.send(CommsCmd::Thinking(true)).await;
-            answer(text, &comms, &llm, &snap, status).await;
+            answer(text, &comms, &llm, &snap, status, persona).await;
             let _ = comms.send(CommsCmd::Thinking(false)).await;
         });
     }
@@ -424,14 +425,14 @@ async fn transcribe(stt: &SttClient, clip: &Pcm) -> Option<String> {
 }
 
 /// Log the driver's words, then answer from telemetry or the LLM.
-async fn answer(question: String, comms: &mpsc::Sender<CommsCmd>, llm: &LlmClient, snap: &watch::Receiver<Arc<TelemetrySnapshot>>, status: VoiceStatus) {
+async fn answer(question: String, comms: &mpsc::Sender<CommsCmd>, llm: &LlmClient, snap: &watch::Receiver<Arc<TelemetrySnapshot>>, status: VoiceStatus, persona: Persona) {
     let question = question.trim().to_string();
     if question.is_empty() {
         return;
     }
     let _ = comms.send(CommsCmd::DriverSaid(question.clone())).await;
     let s = snap.borrow().clone();
-    if let Some(a) = answers::answer(&question, &s, status.llm) {
+    if let Some(a) = answers::answer_as(&question, &s, status.llm, persona) {
         let _ = comms.send(CommsCmd::DriverAnswer { text: a, source: RadioSource::Rule }).await;
         return;
     }
@@ -439,9 +440,9 @@ async fn answer(question: String, comms: &mpsc::Sender<CommsCmd>, llm: &LlmClien
         let _ = comms.send(CommsCmd::DriverAnswer { text: "Copy. I don't have an answer for that one right now.".into(), source: RadioSource::Rule }).await;
         return;
     }
-    let _ = comms.send(CommsCmd::DriverAnswer { text: answers::ACK_THINKING.into(), source: RadioSource::Rule }).await;
+    let _ = comms.send(CommsCmd::DriverAnswer { text: answers::ack(persona).into(), source: RadioSource::Rule }).await;
     let t0 = now_ms();
-    let reply = llm.chat(answers::ENGINEER_PROMPT, &answers::llm_user_message(&question, &s)).await;
+    let reply = llm.chat(answers::system_prompt(persona), &answers::llm_user_message(&question, &s)).await;
     match reply.map(|r| answers::polish_reply(&r)) {
         Ok(Some(text)) => {
             tracing::info!("LLM answer in {} ms: {text}", now_ms() - t0);
@@ -454,7 +455,7 @@ async fn answer(question: String, comms: &mpsc::Sender<CommsCmd>, llm: &LlmClien
             tracing::warn!("LLM failed: {e:#}");
             // Fall back to whatever telemetry can say about the question.
             let s = snap.borrow().clone();
-            let text = answers::answer(&question, &s, false).unwrap_or_else(|| "Copy, we'll come back to you on that.".into());
+            let text = answers::answer_as(&question, &s, false, persona).unwrap_or_else(|| "Copy, we'll come back to you on that.".into());
             let _ = comms.send(CommsCmd::DriverAnswer { text, source: RadioSource::Rule }).await;
         }
     }

@@ -84,12 +84,18 @@ enabled = true
 # Substring of the output device name (run with --list-audio-devices). Empty = default device.
 device = ""
 cache_dir = "tts-cache"
+# Radio colouring: "light" (default; clear pit radio, no hiss), "clean" (no radio effect)
+# or "classic" (gritty TV radio with static and squelch bursts).
+radio_fx = "light"
 
 [comms]
 # "auto" speaks callouts; "copilot" queues proactive callouts for approval on the pit wall.
 mode = "auto"
 # Your first name; the engineer uses it now and then (praise, the finish).
 driver_name = ""
+# "blunt" (default): terse, dry, numbers-first, the veteran-engineer style made famous on the
+# F1 grid. "classic": warmer and fuller sentences.
+persona = "blunt"
 override_ms = 10000
 p2_max_age_ms = 20000
 gate_throttle = 0.85

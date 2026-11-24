@@ -124,10 +124,12 @@ pub struct AudioConfig {
     /// Substring of the output device name; empty = system default.
     pub device: String,
     pub cache_dir: String,
+    /// Radio colouring: "clean", "light" (default) or "classic".
+    pub radio_fx: voice_comms::RadioStyle,
 }
 impl Default for AudioConfig {
     fn default() -> Self {
-        Self { enabled: true, device: String::new(), cache_dir: "tts-cache".into() }
+        Self { enabled: true, device: String::new(), cache_dir: "tts-cache".into(), radio_fx: voice_comms::RadioStyle::Light }
     }
 }
 
@@ -170,6 +172,8 @@ pub struct CommsConfig {
     pub mode: String,
     /// The driver's first name; the engineer uses it sparingly.
     pub driver_name: String,
+    /// "blunt" (terse, GP-style; default) or "classic" (warmer, fuller).
+    pub persona: comms::Persona,
     pub override_ms: u64,
     pub p2_max_age_ms: u64,
     pub gate_throttle: f32,
@@ -177,7 +181,7 @@ pub struct CommsConfig {
 }
 impl Default for CommsConfig {
     fn default() -> Self {
-        Self { mode: "auto".into(), driver_name: String::new(), override_ms: 10_000, p2_max_age_ms: 20_000, gate_throttle: 0.85, gate_steer: 0.15 }
+        Self { mode: "auto".into(), driver_name: String::new(), persona: comms::Persona::Blunt, override_ms: 10_000, p2_max_age_ms: 20_000, gate_throttle: 0.85, gate_steer: 0.15 }
     }
 }
 
@@ -236,5 +240,7 @@ mod tests {
         assert_eq!(cfg.stt.engine, ai_sidecar::SttKind::Whispercpp);
         assert_eq!(cfg.llm.model, "qwen2.5:3b");
         assert_eq!(cfg.voice.ptt_mode, PttMode::Auto);
+        assert_eq!(cfg.comms.persona, comms::Persona::Blunt);
+        assert_eq!(cfg.audio.radio_fx, voice_comms::RadioStyle::Light);
     }
 }

@@ -77,6 +77,25 @@ docker run -d --name kokoro -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:lates
 
 The default voice is `bm_george`, a calm, low British male. Try `bm_fable` or `bm_lewis`, or blend them with `voice = "bm_george+bm_fable"` under `[tts]`. Urgent calls come slightly quicker and routine calls slightly calmer; set the overall rate with `speed`. The CPU image keeps your GPU free for the game.
 
+**How the engineer talks** (`[comms] persona`):
+
+| Persona | Style | Examples |
+| :--- | :--- | :--- |
+| `blunt` (default) | Terse, dry and numbers-first, in the veteran no-nonsense style made famous on the F1 grid. Praise is rationed, and the engineer stays ice-calm when you complain. | "Piastri, 1.6. You're 0.3 quicker." / "Fuel minus 0.3. Lift and coast." / "Understood. Tyres are 34 percent. They're fine. Focus." |
+| `classic` | Warmer, fuller sentences. | "Piastri ahead, gap is 1.6. You were 0.3 quicker last lap." |
+
+Set `[comms] driver_name` and the blunt engineer uses it for the big moments ("Max, P1. Race won. Good job.").
+
+**Sound** (`[audio] radio_fx`):
+- `light` (default): clear pit-to-car radio with no constant hiss.
+- `clean`: no radio effect at all.
+- `classic`: gritty TV-style radio with static and squelch bursts.
+
+**Latency:**
+- Lines are played sentence by sentence, so the first words start while the rest is still being made: about 1 s on the CPU image.
+- Fixed calls (flags, "Copy.", "Box, box") are made in the background at startup and then play almost instantly.
+- For near-instant speech everywhere, use the GPU image (`ghcr.io/remsky/kokoro-fastapi-gpu:latest`, about 1–2 GB of VRAM alongside the game).
+
 ### 2. Hearing you: whisper.cpp
 
 whisper.cpp (CPU build) and the `ggml-base.en` model live in `sidecars/whisper/` (git-ignored). To install them on another machine:

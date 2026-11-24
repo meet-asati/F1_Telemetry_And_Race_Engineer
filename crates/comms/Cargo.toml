@@ -6,4 +6,5 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
 race-state.workspace = true

@@ -14,6 +14,8 @@ use std::sync::{mpsc, Arc, Mutex};
 struct Shared {
     queue: Mutex<VecDeque<f32>>,
     alive: AtomicBool,
+    /// Bumped by `stop()` so a multi-sentence line knows it was cut off.
+    epoch: std::sync::atomic::AtomicU64,
 }
 
 pub struct AudioPlayer {
@@ -33,7 +35,7 @@ impl AudioPlayer {
     /// or the system default.
     pub fn start(device: Option<&str>) -> anyhow::Result<Self> {
         let wanted = device.map(|s| s.to_lowercase());
-        let shared = Arc::new(Shared { queue: Mutex::new(VecDeque::new()), alive: AtomicBool::new(true) });
+        let shared = Arc::new(Shared { queue: Mutex::new(VecDeque::new()), alive: AtomicBool::new(true), epoch: std::sync::atomic::AtomicU64::new(0) });
         let (ready_tx, ready_rx) = mpsc::channel::<anyhow::Result<(u32, String)>>();
         let (keep_tx, keep_rx) = mpsc::channel::<()>();
         let sh = shared.clone();
@@ -122,9 +124,15 @@ impl AudioPlayer {
     }
 
     pub fn stop(&self) {
+        self.shared.epoch.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut q) = self.shared.queue.lock() {
             q.clear();
         }
+    }
+
+    /// Changes whenever playback is stopped from outside (driver keyed up).
+    pub fn epoch(&self) -> u64 {
+        self.shared.epoch.load(Ordering::Relaxed)
     }
 }
 

@@ -5,6 +5,7 @@
 use ai_sidecar::Pcm;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone)]
 pub struct TtsCache {
     dir: PathBuf,
 }

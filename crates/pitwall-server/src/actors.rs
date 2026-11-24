@@ -390,79 +390,117 @@ pub struct AudioActor {
     pub comms: mpsc::Sender<CommsCmd>,
     pub events: broadcast::Sender<Utf8Bytes>,
     pub db: mpsc::UnboundedSender<DbCmd>,
+    /// Radio colouring preset ([audio] radio_fx).
+    pub fx: RadioFx,
+    /// Fixed phrases to pre-synthesize in the background, with the priority
+    /// they are spoken at (the speed is part of the cache key).
+    pub warm: Vec<(String, Priority)>,
+}
+
+/// Urgent calls come a touch quicker, routine ones a touch calmer.
+fn speed_for(p: Priority) -> f32 {
+    match p {
+        Priority::P0 => 1.08,
+        Priority::P1 => 1.0,
+        Priority::P2 => 0.97,
+    }
+}
+
+/// One sentence of speech, from the disk cache or the TTS sidecar.
+async fn synth_sentence(tts: &TtsClient, cache: Option<&TtsCache>, sentence: &str, speed: f32) -> anyhow::Result<(ai_sidecar::Pcm, bool)> {
+    let ns = tts.cache_namespace(speed);
+    if let Some(p) = cache.and_then(|c| c.get(&ns, sentence)) {
+        return Ok((p, true));
+    }
+    let p = tts.synthesize_with(sentence, speed).await?;
+    if let Some(c) = cache {
+        if let Err(e) = c.put(&ns, sentence, &p) {
+            tracing::debug!("tts cache write failed: {e}");
+        }
+    }
+    Ok((p, false))
 }
 
 impl AudioActor {
-    async fn render(&self, text: &str, priority: Priority, seed: u32) -> anyhow::Result<(Vec<f32>, &Arc<AudioPlayer>)> {
-        let player = self.player.as_ref().ok_or_else(|| anyhow::anyhow!("no audio device"))?;
-        // Urgent calls come a touch quicker, routine ones a touch calmer.
-        let speed = match priority {
-            Priority::P0 => 1.08,
-            Priority::P1 => 1.0,
-            Priority::P2 => 0.97,
-        };
-        let spoken = voice_comms::speechify(text);
-        let ns = self.tts.cache_namespace(speed);
-        let pcm = match self.cache.as_ref().and_then(|c| c.get(&ns, &spoken)) {
-            Some(p) => p,
-            None => {
-                let p = self.tts.synthesize_with(&spoken, speed).await?;
-                if let Some(c) = &self.cache {
-                    if let Err(e) = c.put(&ns, &spoken, &p) {
-                        tracing::debug!("tts cache write failed: {e}");
-                    }
-                }
-                p
-            }
-        };
-        let rate = player.sample_rate();
-        let samples = tokio::task::spawn_blocking(move || {
-            let fx = RadioFx::default().process(&pcm.samples, pcm.sample_rate, seed);
-            voice_comms::resample(&fx, pcm.sample_rate, rate)
-        })
-        .await?;
-        Ok((samples, player))
-    }
-
-    /// Synthesize the short replies the driver hears most into the cache, so
-    /// the first "Copy, stand by." isn't waiting on a cold TTS model.
-    async fn warm_up(&self) {
-        if !self.tts.enabled() || self.player.is_none() {
+    /// Pre-synthesize fixed phrases (flags, acknowledgements) into the cache
+    /// in the background, so those calls play instantly later.
+    fn spawn_warm_up(&self) {
+        if !self.tts.enabled() || self.player.is_none() || self.warm.is_empty() {
             return;
         }
-        let t0 = now_ms();
-        let mut ok = 0;
-        for text in [comms::answers::ACK_THINKING, "Loud and clear.", comms::answers::SAY_AGAIN] {
-            match self.render(text, Priority::P1, 1).await {
-                Ok(_) => ok += 1,
-                Err(e) => {
-                    tracing::info!("TTS warm-up skipped ({e:#})");
-                    return;
+        let (tts, cache, warm) = (self.tts.clone(), self.cache.clone(), self.warm.clone());
+        tokio::spawn(async move {
+            let t0 = now_ms();
+            let (mut made, mut hit) = (0, 0);
+            for (text, prio) in warm {
+                for sentence in voice_comms::split_sentences(&voice_comms::speechify(&text)) {
+                    match synth_sentence(&tts, cache.as_ref(), &sentence, speed_for(prio)).await {
+                        Ok((_, true)) => hit += 1,
+                        Ok((_, false)) => made += 1,
+                        Err(e) => {
+                            tracing::info!("TTS warm-up stopped ({e:#})");
+                            return;
+                        }
+                    }
                 }
             }
+            tracing::info!("TTS warm-up: {made} phrases synthesized, {hit} already cached ({} ms)", now_ms() - t0);
+        });
+    }
+
+    /// Speak a line sentence by sentence: the first sentence plays while the
+    /// next is still being synthesized. Stops early if the driver keys up.
+    /// Returns the ms until the first audio started.
+    async fn speak(&self, u: &Utterance, seed: u32) -> anyhow::Result<u64> {
+        let player = self.player.as_ref().ok_or_else(|| anyhow::anyhow!("no audio device"))?;
+        let t0 = now_ms();
+        let sentences = voice_comms::split_sentences(&voice_comms::speechify(&u.text));
+        let n = sentences.len();
+        let speed = speed_for(u.priority);
+        let rate = player.sample_rate();
+        let mut epoch: Option<u64> = None;
+        let mut first_audio_ms = 0;
+        for (i, sentence) in sentences.iter().enumerate() {
+            let pcm = match synth_sentence(&self.tts, self.cache.as_ref(), sentence, speed).await {
+                Ok((p, _)) => p,
+                Err(e) if i > 0 => {
+                    tracing::warn!("tts failed mid-line ({e:#}); line cut short");
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
+            if epoch.is_some_and(|e| e != player.epoch()) {
+                tracing::info!("line cut off by the driver keying up");
+                break;
+            }
+            let fx = self.fx.clone();
+            let samples = tokio::task::spawn_blocking(move || {
+                let wet = fx.process_part(&pcm.samples, pcm.sample_rate, seed.wrapping_add(i as u32), i == 0, i + 1 == n);
+                voice_comms::resample(&wet, pcm.sample_rate, rate)
+            })
+            .await?;
+            let queued_ms = player.play(&samples, u.interrupt && i == 0)?;
+            if i == 0 {
+                epoch = Some(player.epoch());
+                first_audio_ms = now_ms() - t0;
+            }
+            let _ = self.comms.send(CommsCmd::SpeakingUntil(now_ms() + queued_ms)).await;
         }
-        tracing::info!("TTS warmed up ({ok} phrases cached in {} ms)", now_ms() - t0);
+        Ok(first_audio_ms)
     }
 
     pub async fn run(mut self) {
-        self.warm_up().await;
+        self.spawn_warm_up();
         let mut seed = 1u32;
         while let Some(u) = self.rx.recv().await {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let started = now_ms();
             let outcome = if self.tts.enabled() && self.player.is_some() {
-                match self.render(&u.text, u.priority, seed).await {
-                    Ok((samples, player)) => match player.play(&samples, u.interrupt) {
-                        Ok(dur) => {
-                            let _ = self.comms.send(CommsCmd::SpeakingUntil(now_ms() + dur)).await;
-                            tracing::info!("radio [{:?}] ({} ms tts) {}", u.priority, now_ms() - started, u.text);
-                            RadioOutcome::Spoken
-                        }
-                        Err(e) => {
-                            tracing::warn!("playback failed: {e}");
-                            RadioOutcome::TextOnly
-                        }
-                    },
+                match self.speak(&u, seed).await {
+                    Ok(first_ms) => {
+                        tracing::info!("radio [{:?}] ({} ms to first audio) {}", u.priority, first_ms, u.text);
+                        RadioOutcome::Spoken
+                    }
                     Err(e) => {
                         tracing::warn!("tts failed ({e:#}); text only: {}", u.text);
                         RadioOutcome::TextOnly

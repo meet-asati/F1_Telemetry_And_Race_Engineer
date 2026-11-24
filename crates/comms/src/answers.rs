@@ -7,13 +7,68 @@
 //! persona ([`ENGINEER_PROMPT`]), and the reply is cleaned up for radio by
 //! [`polish_reply`].
 
-use crate::rules::{compound_name, lap_str, spoken_name};
+use crate::rules::{compound_name, lap_str, spoken_name, Persona};
 use race_state::snapshot::*;
 
 const CORNERS: [&str; 4] = ["front-left", "front-right", "rear-left", "rear-right"];
 
 /// Said immediately when a question needs the LLM, so the driver knows we heard.
 pub const ACK_THINKING: &str = "Copy, stand by.";
+
+/// The acknowledgement for the active persona.
+pub fn ack(persona: Persona) -> &'static str {
+    match persona {
+        Persona::Blunt => "Copy.",
+        Persona::Classic => ACK_THINKING,
+    }
+}
+
+/// Terse, veteran-engineer prompt (blunt persona).
+pub const BLUNT_PROMPT: &str = "You are the driver's race engineer on team radio in Formula 1: a veteran, unflappable, no-nonsense engineer. \
+Style: extremely short radio phrases, 3 to 14 words in total. Numbers first, then one instruction. Dry, direct, calm; British English. \
+No pleasantries, no explanations unless the driver asks why, no encouragement speeches. Praise only for something genuinely good, and only two or three words. \
+If the driver complains or gets emotional, stay ice-calm, acknowledge in one word and redirect to the job. \
+You are the engineer, never the driver: speak to the driver as 'you'. Refer to other drivers by surname or 'they'. \
+Use only facts and numbers from RACE DATA; if the data does not contain the answer, say 'Don't have that.' \
+No labels, lists, markdown, emojis or sign-offs; never mention data, telemetry or being an AI.";
+
+/// Fixed lines (flags, acknowledgements) to pre-synthesize so they play
+/// instantly, with the priority they are spoken at.
+pub fn warm_phrases(persona: Persona) -> Vec<(String, Priority)> {
+    let (p0, p1): (&[&str], &[&str]) = match persona {
+        Persona::Blunt => (
+            &[
+                "Safety car, safety car. Delta positive.",
+                "VSC, VSC. Positive delta.",
+                "Safety car in this lap. Temps up.",
+                "VSC ending. Be ready.",
+                "Green flag. Go.",
+                "Track's clear. Push.",
+                "Red flag, red flag. Pit lane.",
+            ],
+            &["Copy.", "Loud and clear.", "Understood. Focus on the next corner.", "Negative. Stay out.", "Box, box. Box this lap.", SAY_AGAIN],
+        ),
+        Persona::Classic => (
+            &[
+                "Safety car, safety car. Stay above the delta, no overtaking.",
+                "VSC, VSC. Keep it positive to the delta.",
+                "Green, green, green. Go.",
+                "Track is clear. Full push now.",
+                "Red flag, red flag. Slow down and bring it back to the pit lane.",
+            ],
+            &[ACK_THINKING, "Loud and clear.", "Understood. Deep breath, focus on the next corner.", SAY_AGAIN],
+        ),
+    };
+    p0.iter().map(|t| (t.to_string(), Priority::P0)).chain(p1.iter().map(|t| (t.to_string(), Priority::P1))).collect()
+}
+
+/// The system prompt for the active persona.
+pub fn system_prompt(persona: Persona) -> &'static str {
+    match persona {
+        Persona::Blunt => BLUNT_PROMPT,
+        Persona::Classic => ENGINEER_PROMPT,
+    }
+}
 /// When the question could not be understood or answered.
 pub const SAY_AGAIN: &str = "Sorry, say again? Didn't get that.";
 
@@ -29,6 +84,7 @@ No labels or headings, no lists, no markdown, no emojis, no sign-offs, never men
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Intent {
+    Complaint,
     RadioCheck,
     BoxDecision,
     Strategy,
@@ -50,6 +106,14 @@ enum Intent {
 }
 
 const INTENTS: &[(Intent, &[&str])] = &[
+    (
+        Intent::Complaint,
+        &[
+            "no grip", "tyres are gone", "tyres are dead", "tires are gone", "tires are dead", "tyres are finished", "tires are finished", "this is ridiculous",
+            "this is a joke", "what are we doing", "what are you doing", "terrible", "unbelievable", "so slow", "i can't", "i cannot", "undriveable", "undrivable",
+            "car is awful", "car is terrible",
+        ],
+    ),
     (Intent::RadioCheck, &["radio check", "can you hear", "do you hear", "hear me", "reading me"]),
     (Intent::BoxDecision, &["should i box", "should i pit", "do we box", "do we pit", "box now", "pit now", "box this lap", "pit this lap", "shall we box", "shall i box"]),
     (Intent::Strategy, &["box", "pit", "stop", "strategy", "window", "plan", "undercut", "overcut"]),
@@ -170,6 +234,100 @@ fn capitalize(s: &str) -> String {
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
+/// Terse versions of the common answers (blunt persona). `None` = use the classic wording.
+fn blunt_intent(intent: Intent, snap: &TelemetrySnapshot, question: &str) -> Option<String> {
+    let s = &snap.session;
+    let t = &snap.tyres;
+    let p = &snap.powertrain;
+    let (pi, me) = player(snap)?;
+    let entries = &snap.timing.entries;
+    let cmp = |other: &TimingEntry| match (me.last_lap_ms, other.last_lap_ms) {
+        (Some(a), Some(b)) if a > 0 && b > 0 => {
+            let d = (b as i64 - a as i64) as f32 / 1000.0;
+            if d.abs() < 0.05 {
+                " Same pace.".to_string()
+            } else if d > 0.0 {
+                format!(" You're {d:.1} quicker.")
+            } else {
+                format!(" They're {:.1} quicker.", -d)
+            }
+        }
+        _ => String::new(),
+    };
+    let (wi, w) = worst(&t.wear_pct);
+    Some(match intent {
+        Intent::Complaint => {
+            let tyre_talk = ["tyre", "tire", "grip"].iter().any(|k| question.to_lowercase().contains(k));
+            if tyre_talk && w >= 65.0 {
+                format!("Understood. {w:.0} percent. Box this lap.")
+            } else if tyre_talk {
+                format!("Understood. Tyres are {w:.0} percent. They're fine. Focus.")
+            } else {
+                "Understood. Focus on the next corner.".into()
+            }
+        }
+        Intent::BoxDecision => {
+            let (yes, _) = should_box(snap);
+            if yes {
+                "Box, box. Box this lap.".into()
+            } else {
+                match t.projected_pit_lap {
+                    Some(l) => format!("Negative. Stay out. Tyres good to lap {l}."),
+                    None => "Negative. Stay out.".into(),
+                }
+            }
+        }
+        Intent::GapAhead if snap.timing.position > 1 => {
+            let ahead = entries.get(pi.checked_sub(1)?)?;
+            format!("{}, {}.{}", spoken_name(ahead), snap.timing.gap_ahead_ms.map(secs)?, cmp(ahead))
+        }
+        Intent::GapAhead => format!("You're leading. Gap {}.", snap.timing.gap_behind_ms.map(secs)?),
+        Intent::GapBehind => {
+            let b = entries.get(pi + 1)?;
+            format!("{}, {} behind.{}", spoken_name(b), snap.timing.gap_behind_ms.map(secs)?, cmp(b))
+        }
+        Intent::Tyres => {
+            if wants_to_finish(question) && s.is_race {
+                return Some(match t.projected_pit_lap {
+                    Some(l) if l < s.total_laps => format!("No. Good to lap {l}."),
+                    _ => "Yes. They'll make it.".into(),
+                });
+            }
+            let proj = t.projected_pit_lap.map(|l| format!(" Good to lap {l}.")).unwrap_or_default();
+            format!("{} {w:.0} percent.{proj}", capitalize(CORNERS[wi]))
+        }
+        Intent::Fuel => {
+            let fd = p.fuel_remaining_laps_delta;
+            let sign = if fd >= 0.0 { "plus" } else { "minus" };
+            let what = if fd <= -0.6 {
+                " Big lift and coast."
+            } else if fd <= -0.2 {
+                " Lift and coast."
+            } else {
+                " You're fine."
+            };
+            format!("Fuel {sign} {:.1}.{what}", fd.abs())
+        }
+        Intent::Ers => format!("Battery {:.0} percent.", p.ers_store_pct),
+        Intent::Position if s.is_race => format!("P{}. Lap {} of {}.", snap.timing.position, s.lap, s.total_laps),
+        Intent::LapsLeft if s.is_race => {
+            let n = s.total_laps.saturating_sub(s.lap) + 1;
+            if n <= 1 {
+                "Last lap.".into()
+            } else {
+                format!("{n} to go.")
+            }
+        }
+        Intent::Pace => {
+            let l = me.last_lap_ms.filter(|l| *l > 0)?;
+            let ahead = pi.checked_sub(1).and_then(|i| entries.get(i));
+            format!("{}.{}", lap_str(l), ahead.map(cmp).unwrap_or_default())
+        }
+        Intent::Penalty if me.penalties_ms == 0 => "No penalties.".into(),
+        _ => return None,
+    })
+}
+
 fn answer_intent(intent: Intent, snap: &TelemetrySnapshot, question: &str, also: &[Intent]) -> Option<String> {
     let s = &snap.session;
     let t = &snap.tyres;
@@ -178,6 +336,14 @@ fn answer_intent(intent: Intent, snap: &TelemetrySnapshot, question: &str, also:
     let entries = &snap.timing.entries;
     Some(match intent {
         Intent::RadioCheck => "Loud and clear.".into(),
+        Intent::Complaint => {
+            let (_, w) = worst(&snap.tyres.wear_pct);
+            if ["tyre", "tire", "grip"].iter().any(|k| question.to_lowercase().contains(k)) {
+                format!("Copy that. Tyres are at {w:.0} percent, stay with it, they'll come back to you.")
+            } else {
+                "Understood. Deep breath, focus on the next corner.".into()
+            }
+        }
         Intent::BoxDecision => should_box(snap).1,
         Intent::Strategy => {
             let win = s.pit_window.as_ref().filter(|w| w.ideal_lap > 0).map(|w| format!(" Game window is lap {} to {}, rejoin around P{}.", w.ideal_lap, w.latest_lap, w.rejoin_position)).unwrap_or_default();
@@ -348,14 +514,29 @@ fn answer_intent(intent: Intent, snap: &TelemetrySnapshot, question: &str, also:
 /// With `llm_available`, open-ended questions ("what if...", "why...") are
 /// left to the model even when they mention a known topic.
 pub fn answer(question: &str, snap: &TelemetrySnapshot, llm_available: bool) -> Option<String> {
+    answer_as(question, snap, llm_available, Persona::Classic)
+}
+
+/// [`answer`] in the voice of `persona`.
+pub fn answer_as(question: &str, snap: &TelemetrySnapshot, llm_available: bool, persona: Persona) -> Option<String> {
     if llm_available && is_open_ended(question) {
         return None;
     }
-    let intents = classify(question);
+    let mut intents = classify(question);
     if intents.is_empty() || snap.timing.entries.is_empty() {
         return None;
     }
-    let parts: Vec<String> = intents.iter().filter_map(|&i| answer_intent(i, snap, question, &intents)).collect();
+    // A complaint gets one calm reply, not a data dump.
+    if intents.contains(&Intent::Complaint) {
+        intents = vec![Intent::Complaint];
+    }
+    let parts: Vec<String> = intents
+        .iter()
+        .filter_map(|&i| match persona {
+            Persona::Blunt => blunt_intent(i, snap, question).or_else(|| answer_intent(i, snap, question, &intents)),
+            Persona::Classic => answer_intent(i, snap, question, &intents),
+        })
+        .collect();
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
@@ -594,5 +775,19 @@ mod tests {
         assert_eq!(polish_reply("Rain is <chance> percent."), None);
         assert_eq!(polish_reply("Safety car plan: Box for hards. Keep the gap."), Some("Box for hards. Keep the gap.".into()));
         assert_eq!(polish_reply("Last lap 1:07.4, keep it up."), Some("Last lap 1:07.4, keep it up.".into()));
+    }
+
+    #[test]
+    fn blunt_answers_are_terse() {
+        let s = snap();
+        let b = |q: &str| answer_as(q, &s, false, Persona::Blunt).unwrap();
+        assert_eq!(b("What's the gap ahead?"), "Piastri, 1.6. You're 0.3 quicker.");
+        assert_eq!(b("fuel?"), "Fuel minus 0.3. Lift and coast.");
+        assert_eq!(b("should I box?"), "Negative. Stay out. Tyres good to lap 24.");
+        assert_eq!(b("can we make it to the end on these tyres?"), "No. Good to lap 24.");
+        assert_eq!(b("I have no grip, the tyres are gone!"), "Understood. Tyres are 34 percent. They're fine. Focus.");
+        assert_eq!(b("this is ridiculous"), "Understood. Focus on the next corner.");
+        assert_eq!(b("radio check"), "Loud and clear.", "falls back to the shared wording");
+        assert_eq!(ack(Persona::Blunt), "Copy.");
     }
 }

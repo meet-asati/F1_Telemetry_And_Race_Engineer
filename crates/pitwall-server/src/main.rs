@@ -124,7 +124,11 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(
         CommsActor {
             cfg: arb_cfg,
-            rules: RuleConfig { driver_name: Some(cfg.comms.driver_name.trim().to_string()).filter(|n| !n.is_empty()), ..Default::default() },
+            rules: RuleConfig {
+                driver_name: Some(cfg.comms.driver_name.trim().to_string()).filter(|n| !n.is_empty()),
+                persona: cfg.comms.persona,
+                ..Default::default()
+            },
             voice: voice_tx,
             ptt_button: cfg.voice.ptt_button,
             initial_mode,
@@ -205,10 +209,25 @@ async fn main() -> anyhow::Result<()> {
             player: player.clone(),
             snapshot: snapshot_rx.clone(),
             comms: comms_tx.clone(),
+            persona: cfg.comms.persona,
         }
         .run(),
     );
-    tokio::spawn(AudioActor { rx: audio_rx, tts, cache, player, comms: comms_tx.clone(), events: events_tx.clone(), db: db_tx.clone() }.run());
+    tracing::info!("engineer persona: {:?}, radio effect: {:?}", cfg.comms.persona, cfg.audio.radio_fx);
+    tokio::spawn(
+        AudioActor {
+            rx: audio_rx,
+            tts,
+            cache,
+            player,
+            comms: comms_tx.clone(),
+            events: events_tx.clone(),
+            db: db_tx.clone(),
+            fx: voice_comms::RadioFx::preset(cfg.audio.radio_fx),
+            warm: comms::answers::warm_phrases(cfg.comms.persona),
+        }
+        .run(),
+    );
 
     // ---- Web.
     let hub = Hub { snapshot_json: snapshot_json_rx, snapshot: snapshot_rx, events: events_tx, current_session: current_rx, health: health_rx };

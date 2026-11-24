@@ -9,7 +9,7 @@ pub mod player;
 pub mod speech;
 
 pub use cache::TtsCache;
-pub use dsp::{resample, RadioFx};
+pub use dsp::{resample, split_sentences, RadioFx, RadioStyle};
 pub use mic::{auto_pick_input, is_virtual_input, list_input_devices, MicCapture};
 pub use player::{list_output_devices, AudioPlayer};
 pub use speech::{chirp, speechify};

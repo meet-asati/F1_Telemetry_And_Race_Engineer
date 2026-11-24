@@ -7,4 +7,4 @@ pub mod arbitrator;
 pub mod rules;
 
 pub use arbitrator::{ArbConfig, Arbitrator, GateCtx, Utterance};
-pub use rules::{Alert, RuleConfig, RuleEngine};
+pub use rules::{Alert, Persona, RuleConfig, RuleEngine};
